@@ -1,0 +1,17 @@
+nav {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+nav a {
+  color: #282c34;
+}
+
+nav a.active {
+  font-weight: 700;
+}
+
+main {
+  padding: 0 1rem 1rem;
+}
