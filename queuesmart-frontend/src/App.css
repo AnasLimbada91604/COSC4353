@@ -28,3 +28,7 @@ form p {
   color: #b00020;
   margin: 0.25rem 0 0;
 }
+
+.service-card {
+  margin-bottom: 1rem;
+}
