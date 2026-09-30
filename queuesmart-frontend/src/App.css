@@ -15,3 +15,16 @@ nav a.active {
 main {
   padding: 0 1rem 1rem;
 }
+
+form div {
+  margin-bottom: 0.75rem;
+}
+
+label {
+  display: block;
+}
+
+form p {
+  color: #b00020;
+  margin: 0.25rem 0 0;
+}
