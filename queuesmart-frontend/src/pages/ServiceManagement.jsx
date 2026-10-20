@@ -1,12 +1,13 @@
 import { useState } from "react";
 import mockServices from "../data/mockServices";
+import { priorityOptions } from "../data/priorities"
 
 function ServiceManagement() {
 
     // Define constants
     const MAX_NAME_LENGTH = 100;
     const MAX_DURATION = 480;
-    const emptyForm = {name: "", description: "", duration: "", priority: "Normal"};
+    const emptyForm = {name: "", description: "", duration: "", priority: "Medium"};
 
     const [services, setServices] = useState(mockServices);
     const [errors, setErrors] = useState({});
@@ -37,6 +38,9 @@ function ServiceManagement() {
             nextErrors.duration = "Enter a whole number of minutes.";
         } else if (duration > MAX_DURATION) {
             nextErrors.duration = `Keep it under ${MAX_DURATION} minutes.`;
+        }
+        if (!priorityOptions.includes(values.priority)) {
+            nextErrors.priority = "Select a default priority.";
         }
         return nextErrors;
     }
@@ -93,9 +97,6 @@ function ServiceManagement() {
         setErrors({});
     }
 
-
-
-
     return (
         <main>
             <h1>Service Management</h1>
@@ -138,12 +139,22 @@ function ServiceManagement() {
                 </div>
 
                 <div>
-                    <label htmlFor="service-priority">Priority</label>
-                    <select id="service-priority" name="priority" value={form.priority} onChange={handleChange}>
-                        <option value="Low">Low</option>
-                        <option value="Normal">Normal</option>
-                        <option value="High">High</option>
+                    <label htmlFor="service-priority">Default priority</label>
+                    <select
+                        id="service-priority"
+                        name="priority"
+                        value={form.priority}
+                        onChange={handleChange}
+                        aria-describedby="service-priority-hint"
+                    >
+                        {priorityOptions.map((option) => (
+                            <option key={option} value={option}>{option}</option>
+                        ))}
                     </select>
+                    <small id="service-priority-hint" className="fieldHint">
+                        New people in this queue start at this priority.
+                    </small>
+                    {errors.priority && <p>{errors.priority}</p>}
                 </div>
 
                 <button type="submit">{editingId !== null ? "Save changes" : "Add service"}</button>
@@ -154,7 +165,7 @@ function ServiceManagement() {
                     <h2>{service.name}</h2>
                     <p>{service.description}</p>
                     <p>Duration: {service.duration} min</p>
-                    <p>Priority: {service.priority}</p>
+                    <p>Default Priority: {service.priority}</p>
                     <button type="button" onClick={() => startEdit(service)}>Edit</button>
                 </article>
             ))}
