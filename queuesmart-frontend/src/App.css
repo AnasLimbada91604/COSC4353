@@ -32,3 +32,9 @@ form p {
 .service-card {
   margin-bottom: 1rem;
 }
+
+.fieldHint {
+  display: block;
+  color: #555;
+  margin-top: 0.25rem;
+}

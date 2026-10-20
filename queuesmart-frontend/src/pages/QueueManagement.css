@@ -1,0 +1,32 @@
+.queueList {
+    padding-left: 1.5rem;
+}
+
+.queueEntry {
+    margin-bottom: 1rem;
+}
+
+.queueEntryName {
+    font-weight: 600;
+}
+
+.queueEntryMeta {
+    font-weight: 400;
+    color: #555;
+    margin-left: 0.5rem;
+}
+
+.queueControls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
+}
+
+.queuePrompt {
+    padding: 0.5rem 0.75rem;
+    border-left: 3px solid #b26a00;
+    background: #fff6e0;
+    color: #3d2a00;
+}
