@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import QuickActionButton from "../components/QuickActionButton";
-import mockServices from "../data/mockServices";
+import { api } from "../api";
+import { formatWait } from "../data/currentQueue";
 
 const UPDATE_INTERVAL_MS = 10000;
-const ALMOST_READY_POSITION = 2;
 
 const STATUS_LABELS = {
   waiting: "Waiting",
@@ -18,95 +18,93 @@ const STATUS_MESSAGES = {
   served: "Please head to the service desk now.",
 };
 
-function getStatus(position) {
-  if (position === 0) {
-    return "served";
-  }
-  if (position <= ALMOST_READY_POSITION) {
-    return "almost-ready";
-  }
-  return "waiting";
-}
-
-function formatWait(minutes) {
-  if (minutes < 60) {
-    return `${minutes} min`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
-  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
-}
-
 function QueueStatus() {
-  const location = useLocation();
-  const serviceId = location.state?.serviceId;
-  const service = mockServices.find((item) => item.id === serviceId) ?? mockServices[0];
-  // Joining puts the user at the back of the line.
-  const startPosition = service.queueLength + 1;
-
-  const [position, setPosition] = useState(startPosition);
-  const [hasLeft, setHasLeft] = useState(false);
+  const navigate = useNavigate();
+  const [queue, setQueue] = useState(null);
+  const [error, setError] = useState("");
   const [confirmingLeave, setConfirmingLeave] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState(() => new Date());
+  const [lastUpdated, setLastUpdated] = useState(null);
 
-  // Mock live updates: move up one spot each interval until served.
-  useEffect(() => {
-    if (hasLeft || position === 0) {
-      return undefined;
-    }
-    const timer = setTimeout(() => {
-      setPosition((current) => current - 1);
+  const refresh = useCallback(async () => {
+    try {
+      setQueue(await api("/queue/status"));
       setLastUpdated(new Date());
-    }, UPDATE_INTERVAL_MS);
-    return () => clearTimeout(timer);
-  }, [position, hasLeft]);
+      setError("");
+    } catch (err) {
+      if (err.status === 401) {
+        navigate("/login");
+      } else {
+        setError("Can't reach the server. Showing the last update.");
+      }
+    }
+  }, [navigate]);
 
-  function leaveQueue() {
-    setHasLeft(true);
+  // Poll the API every interval instead of the old mock countdown.
+  useEffect(() => {
+    refresh();
+    const timer = setInterval(refresh, UPDATE_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  async function leaveQueue() {
     setConfirmingLeave(false);
+    try {
+      await api("/queue/leave", { method: "POST" });
+      await refresh();
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
-  function rejoinQueue() {
-    setPosition(startPosition);
-    setHasLeft(false);
-    setLastUpdated(new Date());
-  }
-
-  if (hasLeft) {
+  if (!queue) {
     return (
       <main>
         <h1>Queue Status</h1>
-        <h2>{service.name}</h2>
-        <p>You have left the queue.</p>
-        <QuickActionButton label="Rejoin queue" onClick={rejoinQueue} />
+        <p>{error || "Loading..."}</p>
       </main>
     );
   }
 
-  const status = getStatus(position);
+  if (!queue.inQueue) {
+    return (
+      <main>
+        <h1>Queue Status</h1>
+        {queue.status === "served" ? (
+          <>
+            <h2>{queue.service.name}</h2>
+            <p>It's your turn!</p>
+            <p>{STATUS_MESSAGES.served}</p>
+          </>
+        ) : (
+          <p>You're not in a queue right now.</p>
+        )}
+        <QuickActionButton label="Join a queue" onClick={() => navigate("/join")} />
+      </main>
+    );
+  }
 
   return (
     <main>
       <h1>Queue Status</h1>
-      <h2>{service.name}</h2>
-      <p>{service.description}</p>
+      <h2>{queue.service.name}</h2>
+      <p>{queue.service.description}</p>
       <div aria-live="polite">
-        <p>{status === "served" ? "It's your turn!" : `You are #${position} in line`}</p>
-        <p>Estimated wait: {formatWait(position * service.duration)}</p>
-        <p>Status: {STATUS_LABELS[status]}</p>
-        <p>{STATUS_MESSAGES[status]}</p>
+        <p>You are #{queue.position} in line</p>
+        <p>Estimated wait: {formatWait(queue.estimatedWaitMinutes)}</p>
+        <p>Status: {STATUS_LABELS[queue.status]}</p>
+        <p>{STATUS_MESSAGES[queue.status]}</p>
       </div>
       <p>Last updated: {lastUpdated.toLocaleTimeString()}</p>
-      {status !== "served" &&
-        (confirmingLeave ? (
-          <>
-            <p>Leave the queue? You will lose your spot.</p>
-            <QuickActionButton label="Yes, leave queue" onClick={leaveQueue} />{" "}
-            <QuickActionButton label="Stay in queue" onClick={() => setConfirmingLeave(false)} />
-          </>
-        ) : (
-          <QuickActionButton label="Leave queue" onClick={() => setConfirmingLeave(true)} />
-        ))}
+      {error && <p role="alert">{error}</p>}
+      {confirmingLeave ? (
+        <>
+          <p>Leave the queue? You will lose your spot.</p>
+          <QuickActionButton label="Yes, leave queue" onClick={leaveQueue} />{" "}
+          <QuickActionButton label="Stay in queue" onClick={() => setConfirmingLeave(false)} />
+        </>
+      ) : (
+        <QuickActionButton label="Leave queue" onClick={() => setConfirmingLeave(true)} />
+      )}
     </main>
   );
 }

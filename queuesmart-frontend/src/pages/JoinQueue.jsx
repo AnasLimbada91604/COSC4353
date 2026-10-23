@@ -1,13 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import QuickActionButton from "../components/QuickActionButton";
 import mockServices from "../data/mockServices";
-import {
-  formatWait,
-  getCurrentQueue,
-  joinQueue,
-  leaveQueue,
-} from "../data/currentQueue";
+import { api } from "../api";
+import { formatWait } from "../data/currentQueue";
+
+function toCurrent(status) {
+  return {
+    serviceId: status.service.id,
+    position: status.position,
+    joinedAt: status.joinedAt,
+  };
+}
 
 function JoinQueue() {
   const navigate = useNavigate();
@@ -16,7 +20,7 @@ function JoinQueue() {
   const openServices = mockServices.filter((service) => service.isOpen);
   const closedServices = mockServices.filter((service) => !service.isOpen);
 
-  const [current, setCurrent] = useState(getCurrentQueue);
+  const [current, setCurrent] = useState(null);
   const [confirmingLeave, setConfirmingLeave] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -30,19 +34,35 @@ function JoinQueue() {
   const currentService =
     current && mockServices.find((item) => item.id === current.serviceId);
 
-  function handleJoin() {
-    const entry = joinQueue(service);
-    setCurrent(entry);
-    setNotice(
-      `You joined ${service.name}. You are #${entry.position} in line.`,
-    );
+  useEffect(() => {
+    api("/queue/status")
+      .then((status) => setCurrent(status.inQueue ? toCurrent(status) : null))
+      .catch(() => setCurrent(null));
+  }, []);
+
+  async function handleJoin() {
+    try {
+      const status = await api("/queue/join", {
+        method: "POST",
+        body: { serviceId: service.id },
+      });
+      setCurrent(toCurrent(status));
+      setNotice(`You joined ${service.name}. You are #${status.position} in line.`);
+    } catch (error) {
+      setNotice(error.message);
+    }
   }
 
-  function handleLeave() {
-    leaveQueue();
-    setCurrent(null);
-    setConfirmingLeave(false);
-    setNotice(`You left the ${currentService.name} queue.`);
+  async function handleLeave() {
+    try {
+      await api("/queue/leave", { method: "POST" });
+      setCurrent(null);
+      setNotice(`You left the ${currentService.name} queue.`);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setConfirmingLeave(false);
+    }
   }
 
   return (
