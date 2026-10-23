@@ -3,13 +3,14 @@ const { validate } = require("../middleware/validate");
 const { authenticate, requireRole } = require("../middleware/authenticate");
 const { serviceId } = require("../validation/rules");
 const { findService } = require("../store/services");
-const { findActiveEntry, joinQueue, leaveQueue, serveNext } = require("../store/queues");
+const { findActiveEntry, joinQueue, leaveQueue, serveNext, getQueue } = require("../store/queues");
 const { OUTCOMES, recordJoin, closeEntry, listHistory } = require("../store/history");
 const {
   estimateWaitMinutes,
   estimateServeAt,
   getQueueStatus,
 } = require("../logic/waitTime");
+const { findById } = require("../store/users");
 
 const router = express.Router();
 
@@ -46,6 +47,28 @@ router.get("/status", (req, res) => {
     });
   }
   return res.json({ inQueue: false });
+});
+
+// need the admin service view
+router.get("/:serviceId", requireRole("admin"), (req, res) => {
+  const service = findService(req.params.serviceId);
+  if (!service) {
+    return res.status(404).json({ message: "Service not found." });
+  }
+  const queue = getQueue(service.id).map((entry, index) => {
+    const user = entry.userId === null ? null : findById(entry.userId);
+    return {
+      id: entry.id,
+      name: user ? user.email : `Walk-in #${entry.id}`,
+      priority: entry.priority,
+      joinedAt: entry.joinedAt,
+      position: index + 1,
+    };
+  });
+  return res.json({
+    service: { id: service.id, name: service.name, duration: service.duration },
+    queue,
+  });
 });
 
 router.post("/join", validate({ serviceId }), (req, res) => {

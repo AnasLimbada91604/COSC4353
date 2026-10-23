@@ -74,6 +74,10 @@ function serveNext(serviceId) {
   return line.length > 0 ? line.shift() : null;
 }
 
+function getQueue(serviceId) {
+  return lineFor(Number(serviceId)).map((entry) => ({ ...entry }))
+}
+
 resetQueues();
 
-module.exports = { resetQueues, findActiveEntry, joinQueue, leaveQueue, serveNext };
+module.exports = { resetQueues, findActiveEntry, joinQueue, leaveQueue, serveNext, getQueue};
