@@ -30,4 +30,10 @@ const isOpen = {
   label: "Queue status",
 };
 
-module.exports = { email, password, role, isOpen };
+const serviceId = {
+  required: true,
+  type: "number",
+  label: "Service",
+};
+
+module.exports = { email, password, role, isOpen, serviceId };

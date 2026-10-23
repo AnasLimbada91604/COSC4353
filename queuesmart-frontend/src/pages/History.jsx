@@ -1,9 +1,10 @@
-import mockHistory from "../data/mockHistory";
-import mockServices from "../data/mockServices";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { api } from "../api";
+import { formatWait } from "../data/currentQueue";
 
-function formatDate(isoDate) {
-  // Parse as local time so the date doesn't shift a day in US time zones.
-  return new Date(`${isoDate}T00:00`).toLocaleDateString("en-US", {
+function formatDate(isoTimestamp) {
+  return new Date(isoTimestamp).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -11,22 +12,38 @@ function formatDate(isoDate) {
 }
 
 function History() {
-  const entries = [...mockHistory].sort((a, b) => b.date.localeCompare(a.date));
+  const navigate = useNavigate();
+  const [entries, setEntries] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    api("/history")
+      .then((data) => setEntries(data.history))
+      .catch((err) => {
+        if (err.status === 401) {
+          navigate("/login");
+        } else {
+          setError("Couldn't load your history. Try again in a moment.");
+        }
+      });
+  }, [navigate]);
 
   return (
     <main>
       <h1>History</h1>
-      {entries.length === 0 && <p>You haven't joined any queues yet.</p>}
-      {entries.map((entry) => {
-        const service = mockServices.find((item) => item.id === entry.serviceId);
-        return (
-          <article key={entry.id}>
-            <h2>{service ? service.name : "Unknown service"}</h2>
-            <p>Date: {formatDate(entry.date)}</p>
-            <p>Outcome: {entry.outcome}</p>
-          </article>
-        );
-      })}
+      {error && <p role="alert">{error}</p>}
+      {!entries && !error && <p>Loading...</p>}
+      {entries?.length === 0 && <p>You haven't joined any queues yet.</p>}
+      {entries?.map((entry) => (
+        <article key={entry.id}>
+          <h2>{entry.serviceName}</h2>
+          <p>Date: {formatDate(entry.joinedAt)}</p>
+          <p>Outcome: {entry.outcome}</p>
+          {entry.actualWaitMinutes !== null && (
+            <p>Time in line: {formatWait(entry.actualWaitMinutes)}</p>
+          )}
+        </article>
+      ))}
     </main>
   );
 }

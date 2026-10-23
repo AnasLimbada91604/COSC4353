@@ -51,6 +51,11 @@ function listServices() {
   return services.map((service) => ({ ...service }));
 }
 
+function findService(id) {
+  const service = services.find((item) => item.id === Number(id));
+  return service ? { ...service } : null;
+}
+
 function updateQueueStatus(id, isOpen) {
   const service = services.find((item) => item.id === Number(id));
   if (!service) return null;
@@ -58,4 +63,4 @@ function updateQueueStatus(id, isOpen) {
   return { ...service };
 }
 
-module.exports = { resetServices, listServices, updateQueueStatus };
+module.exports = { resetServices, listServices, findService, updateQueueStatus };

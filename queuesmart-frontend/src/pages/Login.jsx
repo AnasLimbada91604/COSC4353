@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { api, saveToken } from "../api";
 
 function Login() {
   const navigate = useNavigate();
@@ -24,13 +25,21 @@ function Login() {
     return nextErrors;
   }
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault();
     const nextErrors = validate(email, password);
     setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
 
-    if (Object.keys(nextErrors).length === 0) {
-      navigate("/admin");
+    try {
+      const data = await api("/auth/login", {
+        method: "POST",
+        body: { email: email.trim(), password },
+      });
+      saveToken(data.token);
+      navigate(data.user.role === "admin" ? "/admin" : "/dashboard");
+    } catch (error) {
+      setErrors({ password: error.message });
     }
   }
 

@@ -2,6 +2,8 @@ const express = require("express");
 const cors = require("cors");
 const authRoutes = require("./routes/auth");
 const serviceRoutes = require("./routes/services");
+const queueRoutes = require("./routes/queue");
+const historyRoutes = require("./routes/history");
 
 function createApp() {
   const app = express();
@@ -15,6 +17,8 @@ function createApp() {
 
   app.use("/api/auth", authRoutes);
   app.use("/api/services", serviceRoutes);
+  app.use("/api/queue", queueRoutes);
+  app.use("/api/history", historyRoutes);
 
   app.use((req, res) => {
     res.status(404).json({ message: "Not found." });
