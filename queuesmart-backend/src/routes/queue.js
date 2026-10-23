@@ -1,9 +1,9 @@
 const express = require("express");
 const { validate } = require("../middleware/validate");
 const { authenticate, requireRole } = require("../middleware/authenticate");
-const { serviceId } = require("../validation/rules");
+const { serviceId, moveDirection, entryPriority, moveDirections, priorityOptions } = require("../validation/rules");
 const { findService } = require("../store/services");
-const { findActiveEntry, joinQueue, leaveQueue, serveNext, getQueue } = require("../store/queues");
+const {findActiveEntry, joinQueue, leaveQueue, serveNext, getQueue, removeEntry, moveEntry, setEntryPriority,} = require("../store/queues");
 const { OUTCOMES, recordJoin, closeEntry, listHistory } = require("../store/history");
 const {
   estimateWaitMinutes,
@@ -31,6 +31,24 @@ function buildStatus(found, now = new Date()) {
   };
 }
 
+// admin view needed for qm screen
+function adminQueueView(service) {
+  const queue = getQueue(service.id).map((entry, index) => {
+    const user = entry.userId === null ? null : findById(entry.userId);
+    return {
+      id: entry.id,
+      name: user ? user.email : `Walk-in #${entry.id}`,
+      priority: entry.priority,
+      joinedAt: entry.joinedAt,
+      position: index + 1,
+    };
+  });
+  return {
+    service: { id: service.id, name: service.name, duration: service.duration },
+    queue,
+  };
+}
+
 router.get("/status", (req, res) => {
   const found = findActiveEntry(req.user.id);
   if (found) {
@@ -49,26 +67,13 @@ router.get("/status", (req, res) => {
   return res.json({ inQueue: false });
 });
 
-// need the admin service view
+// admin: everyone waiting for one service, in served order
 router.get("/:serviceId", requireRole("admin"), (req, res) => {
   const service = findService(req.params.serviceId);
   if (!service) {
     return res.status(404).json({ message: "Service not found." });
   }
-  const queue = getQueue(service.id).map((entry, index) => {
-    const user = entry.userId === null ? null : findById(entry.userId);
-    return {
-      id: entry.id,
-      name: user ? user.email : `Walk-in #${entry.id}`,
-      priority: entry.priority,
-      joinedAt: entry.joinedAt,
-      position: index + 1,
-    };
-  });
-  return res.json({
-    service: { id: service.id, name: service.name, duration: service.duration },
-    queue,
-  });
+  return res.json(adminQueueView(service));
 });
 
 router.post("/join", validate({ serviceId }), (req, res) => {
@@ -118,5 +123,70 @@ router.post("/:serviceId/serve", requireRole("admin"), (req, res) => {
   }
   return res.json({ served });
 });
+
+// for qm screen, take someone out of line (recorded as a no-show for real users)
+router.delete("/:serviceId/entries/:entryId", requireRole("admin"), (req, res) => {
+  const service = findService(req.params.serviceId);
+  if (!service) {
+    return res.status(404).json({ message: "Service not found." });
+  }
+  const removed = removeEntry(service.id, req.params.entryId);
+  if (!removed) {
+    return res.status(404).json({ message: "That person is not in this queue." });
+  }
+  if (removed.userId !== null) {
+    closeEntry(removed.userId, OUTCOMES.NO_SHOW);
+  }
+  return res.json(adminQueueView(service));
+});
+
+// for qm screen, move someone up or down one spot
+router.patch(
+    "/:serviceId/entries/:entryId/move",
+    requireRole("admin"),
+    validate({ direction: moveDirection }),
+    (req, res) => {
+      if (!moveDirections.includes(req.body.direction)) {
+        return res.status(400).json({
+          errors: [{ field: "direction", message: `Direction must be one of: ${moveDirections.join(", ")}.` }],
+        });
+      }
+      const service = findService(req.params.serviceId);
+      if (!service) {
+        return res.status(404).json({ message: "Service not found." });
+      }
+      const result = moveEntry(service.id, req.params.entryId, req.body.direction);
+      if (result.error === "not-found") {
+        return res.status(404).json({ message: "That person is not in this queue." });
+      }
+      if (result.error === "at-end") {
+        return res.status(409).json({ message: `Can't move ${req.body.direction} any further.` });
+      }
+      return res.json(adminQueueView(service));
+    }
+);
+
+// for qm screen, change someone's priority; they're re-placed in line to match
+router.patch(
+    "/:serviceId/entries/:entryId/priority",
+    requireRole("admin"),
+    validate({ priority: entryPriority }),
+    (req, res) => {
+      if (!priorityOptions.includes(req.body.priority)) {
+        return res.status(400).json({
+          errors: [{ field: "priority", message: `Priority must be one of: ${priorityOptions.join(", ")}.` }],
+        });
+      }
+      const service = findService(req.params.serviceId);
+      if (!service) {
+        return res.status(404).json({ message: "Service not found." });
+      }
+      const updated = setEntryPriority(service.id, req.params.entryId, req.body.priority);
+      if (!updated) {
+        return res.status(404).json({ message: "That person is not in this queue." });
+      }
+      return res.json(adminQueueView(service));
+    }
+);
 
 module.exports = router;

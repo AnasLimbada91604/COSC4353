@@ -93,3 +93,143 @@ describe("GET /api/queue/:serviceId", () => {
         assert.equal((await viewQueue(undefined, 1)).status, 401);
     });
 });
+
+function removeFromQueue(token, serviceId, entryId) {
+    return send(base, `/api/queue/${serviceId}/entries/${entryId}`, { method: "DELETE", token });
+}
+
+function moveInQueue(token, serviceId, entryId, direction) {
+    return send(base, `/api/queue/${serviceId}/entries/${entryId}/move`, {
+        method: "PATCH",
+        token,
+        body: { direction },
+    });
+}
+
+function setPriority(token, serviceId, entryId, priority) {
+    return send(base, `/api/queue/${serviceId}/entries/${entryId}/priority`, {
+        method: "PATCH",
+        token,
+        body: { priority },
+    });
+}
+
+// ids of everyone in line, in served order
+function idsOf(response) {
+    return response.body.queue.map((entry) => entry.id);
+}
+
+describe("DELETE /api/queue/:serviceId/entries/:entryId", () => {
+    test("removes that person and returns the shorter line", async () => {
+        const token = await loginAs("admin");
+        const before = await viewQueue(token, 1);
+        const [first, second, third, fourth] = idsOf(before);
+
+        const response = await removeFromQueue(token, 1, second);
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(idsOf(response), [first, third, fourth]);
+        assert.deepEqual(response.body.queue.map((entry) => entry.position), [1, 2, 3]);
+    });
+
+    test("records a removed user as a no-show in their history", async () => {
+        const adminToken = await loginAs("admin");
+        const userToken = await loginAs("user");
+        const joined = await send(base, "/api/queue/join", { method: "POST", token: userToken, body: { serviceId: 1 } });
+        const line = await viewQueue(adminToken, 1);
+        const userEntry = line.body.queue.find((entry) => entry.name === "user@queuesmart.edu");
+        assert.equal(joined.status, 201);
+
+        await removeFromQueue(adminToken, 1, userEntry.id);
+
+        const status = await send(base, "/api/queue/status", { method: "GET", token: userToken });
+        const history = await send(base, "/api/history", { method: "GET", token: userToken });
+        assert.equal(status.body.inQueue, false);
+        assert.equal(history.body.history[0].outcome, "No-show");
+    });
+
+    test("returns 404 for an unknown person or service", async () => {
+        const token = await loginAs("admin");
+        assert.equal((await removeFromQueue(token, 1, 999)).status, 404);
+        assert.equal((await removeFromQueue(token, 999, 1)).status, 404);
+    });
+
+    test("blocks non-admins", async () => {
+        const token = await loginAs("user");
+        assert.equal((await removeFromQueue(token, 1, 1)).status, 403);
+    });
+});
+
+describe("PATCH /api/queue/:serviceId/entries/:entryId/priority", () => {
+    test("raising priority moves them to the back of the higher group", async () => {
+        const token = await loginAs("admin");
+        const [first, second, third, fourth] = idsOf(await viewQueue(token, 1)); // all Medium
+
+        await setPriority(token, 1, fourth, "High");
+        const response = await setPriority(token, 1, third, "High");
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(idsOf(response), [fourth, third, first, second]);
+        assert.equal(response.body.queue[1].priority, "High");
+    });
+
+    test("lowering priority moves them to the front of the lower group", async () => {
+        const token = await loginAs("admin");
+        const [first, second, third, fourth] = idsOf(await viewQueue(token, 1));
+
+        await setPriority(token, 1, fourth, "Low");
+        const response = await setPriority(token, 1, first, "Low");
+
+        assert.deepEqual(idsOf(response), [second, third, first, fourth]);
+    });
+
+    test("rejects a priority that isn't Low, Medium or High", async () => {
+        const token = await loginAs("admin");
+        const response = await setPriority(token, 1, 1, "Urgent");
+        assert.equal(response.status, 400);
+        assert.equal(response.body.errors[0].field, "priority");
+    });
+
+    test("returns 404 for someone not in the queue", async () => {
+        const token = await loginAs("admin");
+        assert.equal((await setPriority(token, 1, 999, "High")).status, 404);
+    });
+});
+
+describe("PATCH /api/queue/:serviceId/entries/:entryId/move", () => {
+    test("swaps with the neighbor and keeps priority inside the same group", async () => {
+        const token = await loginAs("admin");
+        const [first, second, third, fourth] = idsOf(await viewQueue(token, 1));
+
+        const response = await moveInQueue(token, 1, second, "up");
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(idsOf(response), [second, first, third, fourth]);
+        assert.equal(response.body.queue[0].priority, "Medium");
+    });
+
+    test("crossing into another group takes that group's priority", async () => {
+        const token = await loginAs("admin");
+        const [, , , fourth] = idsOf(await viewQueue(token, 1));
+        await setPriority(token, 1, fourth, "High"); // fourth is now first, the only High
+
+        const response = await moveInQueue(token, 1, fourth, "down");
+
+        assert.equal(response.body.queue[1].id, fourth);
+        assert.equal(response.body.queue[1].priority, "Medium");
+    });
+
+    test("can't move past either end of the line", async () => {
+        const token = await loginAs("admin");
+        const [first, , , fourth] = idsOf(await viewQueue(token, 1));
+        assert.equal((await moveInQueue(token, 1, first, "up")).status, 409);
+        assert.equal((await moveInQueue(token, 1, fourth, "down")).status, 409);
+    });
+
+    test("rejects a direction that isn't up or down", async () => {
+        const token = await loginAs("admin");
+        const response = await moveInQueue(token, 1, 1, "sideways");
+        assert.equal(response.status, 400);
+        assert.equal(response.body.errors[0].field, "direction");
+    });
+});

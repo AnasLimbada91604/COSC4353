@@ -59,7 +59,22 @@ const servicePriority = {
   label: "Service priority",
 };
 
+const moveDirection = {
+  required: true,
+  type: "string",
+  trim: true,
+  label: "Direction",
+};
+
+const entryPriority = {
+  required: true,
+  type: "string",
+  trim: true,
+  label: "Priority",
+};
+
 const priorityOptions = ["Low", "Medium", "High"];
+const moveDirections = ["up", "down"];
 const maxDuration = 480;
 
 const serviceId = {
@@ -68,4 +83,4 @@ const serviceId = {
     label: "Service",
 };
 
-module.exports = { email, password, role, isOpen, serviceId, serviceName, serviceDescription, serviceDuration, servicePriority, priorityOptions, maxDuration};
+module.exports = { email, password, role, isOpen, serviceId, serviceName, serviceDescription, serviceDuration, servicePriority, moveDirection, entryPriority, priorityOptions, moveDirections, maxDuration };

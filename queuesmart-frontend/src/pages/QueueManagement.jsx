@@ -1,181 +1,230 @@
-import { useState } from "react";
-import mockServices from "../data/mockServices";
-import mockQueue from "../data/mockQueue";
-import { priorityOptions, priorityRank } from "../data/priorities";
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { api } from "../api";
+import { priorityOptions } from "../data/priorities";
 import "./QueueManagement.css";
 
-// place updated entry at new priority queue, if coming from lower p place at bottom, if from higher p place on top
-function insertByPriority(queue, entry, atFront = false) {
-    const rank = priorityRank[entry.priority];
-    let i = 0;
-    while (
-        i < queue.length &&
-        (atFront ? priorityRank[queue[i].priority] > rank : priorityRank[queue[i].priority] >= rank)
-        ) {
-        i++;
-    }
-    return queue.slice(0, i).concat(entry, queue.slice(i));
+function formatJoinedAt(isoString) {
+    return new Date(isoString).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// queue logic lives in the backend; this screen only calls the API
+
 function QueueManagement() {
-    // define the queues for the queue management
-    const [queues, setQueues] = useState(mockQueue);
-    const [selectedServiceId, setSelectedServiceId] = useState(mockServices[0].id);
-
-    // set the service and current queue
-    const service = mockServices.find((item) => item.id === selectedServiceId);
-    const currentQueue = queues[selectedServiceId] ?? [];
-
-    // double-check with the user to remove and tell when removed
-    const [confirmingId, setConfirmingId] = useState(null);   // whose Remove is being confirmed
+    const navigate = useNavigate();
+    const [services, setServices] = useState([]);
+    const [selectedServiceId, setSelectedServiceId] = useState(null);
+    const [serviceInfo, setServiceInfo] = useState(null);
+    const [queue, setQueue] = useState([]);
     const [notice, setNotice] = useState("");
+    const [error, setError] = useState("");
+    const [isBusy, setIsBusy] = useState(false);
+
+    // double-check with the admin
+    const [confirmingId, setConfirmingId] = useState(null);
     const [pendingMove, setPendingMove] = useState(null);
 
-    // always renders the current queue
-    function updateCurrentQueue(nextLine) {
-        setQueues((current) => ({ ...current, [selectedServiceId]: nextLine }));
-        clearPrompts();
-    }
+    // not logged in -> login page or logged in but not admin -> message (cause it was weird to be open to everyone)
+    const handleError = useCallback((err) => {
+        if (err.status === 401) {
+            navigate("/login");
+        } else if (err.status === 403) {
+            setError("Only admins can manage queues. Log in with an admin account.");
+        } else {
+            setError(err.message || "Can't reach the server. Try again in a moment.");
+        }
+    }, [navigate]);
 
-    // only one confirm prompt open at a time
+    // load the service list once, then select the first service
+    useEffect(() => {
+        api("/services")
+            .then((data) => {
+                setServices(data.services);
+                if (data.services.length > 0) setSelectedServiceId(data.services[0].id);
+            })
+            .catch(handleError);
+    }, [handleError]);
+
+    // fetch the selected service's line from the backend
+    const loadQueue = useCallback(async () => {
+        if (selectedServiceId === null) return;
+        try {
+            const data = await api(`/queue/${selectedServiceId}`);
+            setServiceInfo(data.service);
+            setQueue(data.queue);
+            setError("");
+        } catch (err) {
+            handleError(err);
+        }
+    }, [selectedServiceId, handleError]);
+
+    // reload whenever a different service is picked
+    useEffect(() => {
+        loadQueue();
+    }, [loadQueue]);
+
+    // only one prompt open at a time
     function clearPrompts() {
         setConfirmingId(null);
         setPendingMove(null);
     }
 
-    // cut the person served out of the queue, notify, update the queue (only if queue is not empty)
-    function serveNext() {
-        if (currentQueue.length === 0) return;
-        const [served, ...rest] = currentQueue;
-        updateCurrentQueue(rest);
-        setNotice(`Now serving ${served.name}.`);
-    }
-
-    // cut the person out of the queue, notify
-    function removeEntry(entry) {
-        updateCurrentQueue(currentQueue.filter((item) => item.id !== entry.id));
+    // run a request that returns the updated line, then show it and a notice
+    async function runAction(request, successNotice) {
+        setIsBusy(true);
         clearPrompts();
-        setNotice(`${entry.name} was removed from the queue.`);
+        try {
+            const data = await request();
+            setQueue(data.queue);
+            setNotice(successNotice);
+            setError("");
+        } catch (err) {
+            handleError(err);
+        } finally {
+            setIsBusy(false);
+        }
     }
 
-    // clean up at after removal approval
+    // serve returns only who was served, so reload the line afterward
+    async function serveNext() {
+        if (queue.length === 0) return;
+        const next = queue[0];
+        setIsBusy(true);
+        clearPrompts();
+        try {
+            await api(`/queue/${selectedServiceId}/serve`, { method: "POST" });
+            setNotice(`Now serving ${next.name}.`);
+            await loadQueue();
+        } catch (err) {
+            handleError(err);
+        } finally {
+            setIsBusy(false);
+        }
+    }
+
     function startRemove(entry) {
         setPendingMove(null);
         setConfirmingId(entry.id);
     }
 
-    // swap entry with its neighbor also the moved entry ends up with newPriority
-    function applyMove(index, direction, newPriority) {
-        const target = index + direction;
-        const entry = currentQueue[index];
-        const nextLine = [...currentQueue];
-        nextLine[index] = currentQueue[target];
-        nextLine[target] = { ...entry, priority: newPriority };
-        updateCurrentQueue(nextLine);
+    function removeEntry(entry) {
+        runAction(
+            () => api(`/queue/${selectedServiceId}/entries/${entry.id}`, { method: "DELETE" }),
+            `${entry.name} was removed from the queue.`
+        );
+    }
 
-        const moveText = `${entry.name} moved ${direction === -1 ? "up" : "down"}`;
-        setNotice(
+    // send the move; the backend swaps them and applies the neighbor's priority if it differs
+    function sendMove(entry, direction, newPriority) {
+        const word = direction === -1 ? "up" : "down";
+        runAction(
+            () => api(`/queue/${selectedServiceId}/entries/${entry.id}/move`, {
+                method: "PATCH",
+                body: { direction: word },
+            }),
             newPriority === entry.priority
-                ? `${moveText}.`
-                : `${moveText} and is now ${newPriority} priority.`
+                ? `${entry.name} moved ${word}.`
+                : `${entry.name} moved ${word} and is now ${newPriority} priority.`
         );
     }
 
     // same-priority neighbor: move right away, else ask first since it changes priority
     function moveEntry(index, direction) {           // direction: -1 = up, +1 = down
         const target = index + direction;
-        if (target < 0 || target >= currentQueue.length) return;   // can't move past the ends
-        const entry = currentQueue[index];
-        const neighbor = currentQueue[target];
+        if (target < 0 || target >= queue.length) return;   // can't move past the ends
+        const entry = queue[index];
+        const neighbor = queue[target];
         clearPrompts();
 
-        // ask to move priority if different
         if (neighbor.priority !== entry.priority) {
             setPendingMove({ entryId: entry.id, direction, newPriority: neighbor.priority });
             return;
         }
-        applyMove(index, direction, entry.priority);
+        sendMove(entry, direction, entry.priority);
     }
 
     function confirmMove() {
         if (!pendingMove) return;
-        const { entryId, direction, newPriority } = pendingMove;
-        setPendingMove(null);
-
-        const index = currentQueue.findIndex((item) => item.id === entryId);
-        const target = index + direction;
-        if (index === -1 || target < 0 || target >= currentQueue.length) return;
-        applyMove(index, direction, newPriority);
+        const entry = queue.find((item) => item.id === pendingMove.entryId);
+        if (!entry) return clearPrompts();
+        sendMove(entry, pendingMove.direction, pendingMove.newPriority);
     }
 
-    // make new queue with updated priority and notify/cleanup
+    // the backend re-places them in line to match the new priority
     function updatePriority(entry, newPriority) {
         if (newPriority === entry.priority) return;
-        const nextLine = currentQueue.filter((item) => item.id !== entry.id);
-        const newEntry = {...entry, priority: newPriority};
-        const isLowering = priorityRank[newPriority] < priorityRank[entry.priority];
-        updateCurrentQueue(insertByPriority(nextLine, newEntry, isLowering));
-        clearPrompts();
-        setNotice(`${entry.name} priority changed to ${newPriority}.`);
+        runAction(
+            () => api(`/queue/${selectedServiceId}/entries/${entry.id}/priority`, {
+                method: "PATCH",
+                body: { priority: newPriority },
+            }),
+            `${entry.name} priority changed to ${newPriority}.`
+        );
     }
 
     return (
         <main>
             <h1>Queue Management</h1>
+            {error && <p role="alert">{error}</p>}
 
             <label htmlFor="queue-service">Service</label>
             <select
                 id="queue-service"
-                value={selectedServiceId}
+                value={selectedServiceId ?? ""}
                 onChange={(event) => {
                     setSelectedServiceId(Number(event.target.value));
                     setNotice("");
-                    setConfirmingId(null);
+                    clearPrompts();
                 }}
             >
-                {mockServices.map((item) => (
+                {services.map((item) => (
                     <option key={item.id} value={item.id}>{item.name}</option>
                 ))}
             </select>
 
-            <h2>{service.name}: {currentQueue.length} in line</h2>
-            <p>Estimated wait for the last person: {Math.max(0, (currentQueue.length - 1) * service.duration)} min</p>
+            {serviceInfo && (
+                <>
+                    <h2>{serviceInfo.name}: {queue.length} in line</h2>
+                    <p>Estimated wait for the last person: {Math.max(0, (queue.length - 1) * serviceInfo.duration)} min</p>
+                </>
+            )}
 
-            {currentQueue.length === 0 && <p>No one is waiting.</p>}
+            {queue.length === 0 && <p>No one is waiting.</p>}
             {notice && <p role="status">{notice}</p>}
-            <button type="button" onClick={serveNext} disabled={currentQueue.length === 0}>
+            <button type="button" onClick={serveNext} disabled={queue.length === 0 || isBusy}>
                 Serve next
             </button>
 
             <ol className="queueList">
-                {currentQueue.map((entry, index) => {
+                {queue.map((entry, index) => {
                     const isPendingMove = pendingMove?.entryId === entry.id;
                     return (
                         <li key={entry.id} className="queueEntry">
                             <div className="queueEntryName">
                                 {entry.name}
-                                <span className="queueEntryMeta">joined {entry.joinedAt}</span>
+                                <span className="queueEntryMeta">joined {formatJoinedAt(entry.joinedAt)}</span>
                             </div>
 
                             <div className="queueControls">
                                 <select
                                     aria-label={`Priority for ${entry.name}`}
                                     value={entry.priority}
+                                    disabled={isBusy}
                                     onChange={(event) => updatePriority(entry, event.target.value)}
                                 >
                                     {priorityOptions.map((option) => (
                                         <option key={option} value={option}>{option}</option>
                                     ))}
                                 </select>
-                                <button type="button" onClick={() => moveEntry(index, -1)} disabled={index === 0}>Move up</button>
-                                <button type="button" onClick={() => moveEntry(index, 1)} disabled={index === currentQueue.length - 1}>Move down</button>
+                                <button type="button" onClick={() => moveEntry(index, -1)} disabled={index === 0 || isBusy}>Move up</button>
+                                <button type="button" onClick={() => moveEntry(index, 1)} disabled={index === queue.length - 1 || isBusy}>Move down</button>
                                 {confirmingId === entry.id ? (
                                     <>
-                                        <button type="button" onClick={() => removeEntry(entry)}>Yes, remove</button>
+                                        <button type="button" onClick={() => removeEntry(entry)} disabled={isBusy}>Yes, remove</button>
                                         <button type="button" onClick={() => setConfirmingId(null)}>Cancel</button>
                                     </>
                                 ) : (
-                                    <button type="button" onClick={() => startRemove(entry)}>Remove</button>
+                                    <button type="button" onClick={() => startRemove(entry)} disabled={isBusy}>Remove</button>
                                 )}
                             </div>
 
@@ -185,7 +234,7 @@ function QueueManagement() {
                                         Moving {entry.name} {pendingMove.direction === -1 ? "up" : "down"} changes
                                         their priority from {entry.priority} to {pendingMove.newPriority}.
                                     </span>
-                                    <button type="button" onClick={confirmMove}>Move and change priority</button>
+                                    <button type="button" onClick={confirmMove} disabled={isBusy}>Move and change priority</button>
                                     <button type="button" onClick={() => setPendingMove(null)}>Cancel</button>
                                 </div>
                             )}
