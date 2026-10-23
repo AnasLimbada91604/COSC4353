@@ -38,12 +38,14 @@ const initialServices = [
 ];
 
 let services = cloneSeed();
+let nextId = 5;
 
 function cloneSeed() {
   return initialServices.map((service) => ({ ...service }));
 }
 
 function resetServices() {
+  nextId = 5;
   services = cloneSeed();
 }
 
@@ -63,4 +65,25 @@ function updateQueueStatus(id, isOpen) {
   return { ...service };
 }
 
-module.exports = { resetServices, listServices, findService, updateQueueStatus };
+function findServiceRecord(id){
+  return services.find((service) => service.id === Number(id));
+}
+
+function createService({name, description, duration, priority}) {
+  const service = {id: nextId, name, description, duration, priority, queueLength: 0, isOpen: true};
+  services.push(service);
+  nextId+=1;
+  return {... service};
+}
+
+function updateService(id, {name, description, duration, priority}) {
+  const service = findServiceRecord(id);
+  if (!service) return null;
+  service.name = name;
+  service.description = description;
+  service.duration = duration;
+  service.priority = priority;
+  return { ...service };
+}
+
+module.exports = { resetServices, listServices, updateQueueStatus, findService, createService, updateService };

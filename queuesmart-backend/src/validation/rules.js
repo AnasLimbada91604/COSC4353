@@ -30,10 +30,42 @@ const isOpen = {
   label: "Queue status",
 };
 
-const serviceId = {
+const serviceName = {
   required: true,
-  type: "number",
-  label: "Service",
+  type: "string",
+  trim: true,
+  maxLength: 100,
+  label: "Service name",
 };
 
-module.exports = { email, password, role, isOpen, serviceId };
+const serviceDescription = {
+  required: true,
+  type: "string",
+  trim: true,
+  maxLength: 500,
+  label: "Service description",
+};
+
+const serviceDuration = {
+  required: true,
+  type: "number",
+  label: "Service duration",
+};
+
+const servicePriority = {
+  required: true,
+  type: "string",
+  trim: true,
+  label: "Service priority",
+};
+
+const priorityOptions = ["Low", "Medium", "High"];
+const maxDuration = 480;
+
+const serviceId = {
+    required: true,
+    type: "number",
+    label: "Service",
+};
+
+module.exports = { email, password, role, isOpen, serviceId, serviceName, serviceDescription, serviceDuration, servicePriority, priorityOptions, maxDuration};
