@@ -217,6 +217,7 @@ router.patch(
       if (!updated) {
         return res.status(404).json({ message: "That person is not in this queue." });
       }
+      notifyAlmostServed(service);
       return res.json(adminQueueView(service));
     }
 );
