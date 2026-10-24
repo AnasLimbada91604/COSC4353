@@ -1,62 +1,97 @@
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import QuickActionButton from "../components/QuickActionButton";
-import mockServices from "../data/mockServices";
-import { formatWait, getCurrentQueue } from "../data/currentQueue";
+import { api } from "../api";
+import { formatWait, servicesFrom } from "../queueDisplay";
 
-const ALMOST_READY_POSITION = 2;
+const NOTIFICATIONS_SHOWN = 5;
 
-function buildNotifications(current, currentService) {
-  const notes = [];
-  if (currentService) {
-    const joinedTime = new Date(current.joinedAt).toLocaleTimeString([], {
-      hour: "numeric",
-      minute: "2-digit",
-    });
-    notes.push(`You joined the ${currentService.name} queue at ${joinedTime}.`);
-    if (current.position <= ALMOST_READY_POSITION) {
-      notes.push(
-        `You're almost up at ${currentService.name}. Please head to the service desk.`,
-      );
-    }
-  }
-  mockServices
-    .filter((service) => !service.isOpen)
-    .forEach((service) =>
-      notes.push(
-        `${service.name} is closed right now and not taking new people.`,
-      ),
-    );
-  return notes;
+function formatTime(isoString) {
+  return new Date(isoString).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function UserDashboard() {
   const navigate = useNavigate();
 
-  const current = getCurrentQueue();
-  const currentService =
-    current && mockServices.find((service) => service.id === current.serviceId);
-  const activeServices = mockServices.filter((service) => service.isOpen);
-  const notifications = buildNotifications(current, currentService);
+  const [status, setStatus] = useState(null);
+  const [services, setServices] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const [statusData, servicesData, notificationData] = await Promise.all([
+          api("/queue/status"),
+          api("/services"),
+          api("/notifications"),
+        ]);
+        const open = servicesFrom(servicesData).filter(
+          (service) => service.isOpen,
+        );
+        const estimates = await Promise.all(
+          open.map((service) => api(`/queue/${service.id}/estimate`)),
+        );
+
+        setStatus(statusData);
+        setServices(
+          open.map((service, index) => ({
+            ...service,
+            estimate: estimates[index],
+          })),
+        );
+        setNotifications(notificationData.notifications);
+        setError("");
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  if (loading) {
+    return (
+      <main>
+        <h1>User Dashboard</h1>
+        <p>Loading your dashboard...</p>
+      </main>
+    );
+  }
+
+  if (error) {
+    return (
+      <main>
+        <h1>User Dashboard</h1>
+        <p role="alert">
+          {error}{" "}
+          {/token|sign in|log in|unauthorized/i.test(error) && (
+            <Link to="/login">Log in</Link>
+          )}
+        </p>
+      </main>
+    );
+  }
 
   return (
     <main>
       <h1>User Dashboard</h1>
 
-      <h2>Your Queue Status</h2>
-      {currentService ? (
+      <h2>Your queue status</h2>
+      {status.inQueue ? (
         <>
           <p>
-            You are #{current.position} in line for {currentService.name}.
-            Estimated wait:{" "}
-            {formatWait(current.position * currentService.duration)}.
+            You are #{status.position} in line for {status.service.name}.
+            Estimated wait: {formatWait(status.estimatedWaitMinutes)}.
           </p>
           <QuickActionButton
             label="View live status"
-            onClick={() =>
-              navigate("/queue-status", {
-                state: { serviceId: currentService.id },
-              })
-            }
+            onClick={() => navigate("/queue-status")}
           />{" "}
           <QuickActionButton
             label="Leave or change queue"
@@ -65,7 +100,11 @@ function UserDashboard() {
         </>
       ) : (
         <>
-          <p>You're not in a queue right now.</p>
+          <p>
+            {status.status === "served"
+              ? `You were served at ${status.service.name}. You're not in a queue right now.`
+              : "You're not in a queue right now."}
+          </p>
           <QuickActionButton
             label="Join a queue"
             onClick={() => navigate("/join")}
@@ -73,15 +112,15 @@ function UserDashboard() {
         </>
       )}
 
-      <h2>Active Services</h2>
-      {activeServices.length === 0 ? (
+      <h2>Active services</h2>
+      {services.length === 0 ? (
         <p>No services are open right now.</p>
       ) : (
         <ul>
-          {activeServices.map((service) => (
+          {services.map((service) => (
             <li key={service.id}>
-              <strong>{service.name}</strong>: {service.queueLength} in line,
-              about {formatWait((service.queueLength + 1) * service.duration)}{" "}
+              <strong>{service.name}</strong>: {service.estimate.peopleInLine}{" "}
+              in line, about {formatWait(service.estimate.estimatedWaitMinutes)}{" "}
               wait if you join now
             </li>
           ))}
@@ -90,11 +129,16 @@ function UserDashboard() {
 
       <h2>Notifications</h2>
       {notifications.length === 0 ? (
-        <p>No new notifications.</p>
+        <p>
+          No notifications yet. You'll get one when you join a queue and when
+          you're almost up.
+        </p>
       ) : (
         <ul>
-          {notifications.map((note) => (
-            <li key={note}>{note}</li>
+          {notifications.slice(0, NOTIFICATIONS_SHOWN).map((notification) => (
+            <li key={notification.id}>
+              {notification.message} ({formatTime(notification.createdAt)})
+            </li>
           ))}
         </ul>
       )}

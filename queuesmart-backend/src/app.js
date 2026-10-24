@@ -4,6 +4,7 @@ const authRoutes = require("./routes/auth");
 const serviceRoutes = require("./routes/services");
 const queueRoutes = require("./routes/queue");
 const historyRoutes = require("./routes/history");
+const notificationRoutes = require("./routes/notifications");
 
 function createApp() {
   const app = express();
@@ -19,6 +20,7 @@ function createApp() {
   app.use("/api/services", serviceRoutes);
   app.use("/api/queue", queueRoutes);
   app.use("/api/history", historyRoutes);
+  app.use("/api/notifications", notificationRoutes);
 
   app.use((req, res) => {
     res.status(404).json({ message: "Not found." });
@@ -26,7 +28,9 @@ function createApp() {
 
   app.use((err, req, res, next) => {
     if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
-      return res.status(400).json({ message: "Request body must be valid JSON." });
+      return res
+        .status(400)
+        .json({ message: "Request body must be valid JSON." });
     }
     console.error(err);
     return res.status(500).json({ message: "Something went wrong." });

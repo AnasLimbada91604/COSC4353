@@ -11,6 +11,7 @@ const {
   getQueueStatus,
 } = require("../logic/waitTime");
 const { findById } = require("../store/users");
+const { notifyJoined, notifyAlmostServed } = require("../logic/notifications");
 
 const router = express.Router();
 
@@ -68,6 +69,25 @@ router.get("/status", (req, res) => {
 });
 
 // admin: everyone waiting for one service, in served order
+
+router.get("/:serviceId/estimate", (req, res) => {
+  const service = findService(req.params.serviceId);
+  if (!service) {
+    return res.status(404).json({ message: "Service not found." });
+  }
+  const peopleInLine = getQueue(service.id).length;
+  return res.json({
+    serviceId: service.id,
+    isOpen: service.isOpen,
+    peopleInLine,
+    minutesPerPerson: service.duration,
+    estimatedWaitMinutes: estimateWaitMinutes(
+      peopleInLine + 1,
+      service.duration,
+    ),
+  });
+});
+
 router.get("/:serviceId", requireRole("admin"), (req, res) => {
   const service = findService(req.params.serviceId);
   if (!service) {
@@ -97,7 +117,17 @@ router.post("/join", validate({ serviceId }), (req, res) => {
     estimatedWaitMinutes: status.estimatedWaitMinutes,
     joinedAt: joined.entry.joinedAt,
   });
-  return res.status(201).json(status);
+  const notifications = [
+    notifyJoined({
+      userId: req.user.id,
+      entryId: joined.entry.id,
+      service,
+      position: joined.position,
+      estimatedWaitMinutes: status.estimatedWaitMinutes,
+    }),
+    ...notifyAlmostServed(service),
+  ].filter((notification) => notification.userId === req.user.id);
+  return res.status(201).json({ ...status, notifications });
 });
 
 router.post("/leave", (req, res) => {
@@ -106,6 +136,7 @@ router.post("/leave", (req, res) => {
     return res.status(404).json({ message: "You are not in a queue." });
   }
   closeEntry(req.user.id, OUTCOMES.LEFT);
+  notifyAlmostServed(findService(entry.serviceId));
   return res.json({ inQueue: false });
 });
 
@@ -121,49 +152,50 @@ router.post("/:serviceId/serve", requireRole("admin"), (req, res) => {
   if (served.userId !== null) {
     closeEntry(served.userId, OUTCOMES.SERVED);
   }
+  notifyAlmostServed(service);
   return res.json({ served });
 });
-
 // for qm screen, take someone out of line (recorded as a no-show for real users)
 router.delete("/:serviceId/entries/:entryId", requireRole("admin"), (req, res) => {
-  const service = findService(req.params.serviceId);
-  if (!service) {
-    return res.status(404).json({ message: "Service not found." });
-  }
-  const removed = removeEntry(service.id, req.params.entryId);
-  if (!removed) {
-    return res.status(404).json({ message: "That person is not in this queue." });
-  }
-  if (removed.userId !== null) {
-    closeEntry(removed.userId, OUTCOMES.NO_SHOW);
-  }
-  return res.json(adminQueueView(service));
-});
-
+    const service = findService(req.params.serviceId);
+    if (!service) {
+      return res.status(404).json({ message: "Service not found." });
+    }
+    const removed = removeEntry(service.id, req.params.entryId);
+    if (!removed) {
+      return res.status(404).json({ message: "That person is not in this queue." });
+    }
+    if (removed.userId !== null) {
+      closeEntry(removed.userId, OUTCOMES.NO_SHOW);
+    }
+    notifyAlmostServed(service);
+    return res.json(adminQueueView(service));
+  });
 // for qm screen, move someone up or down one spot
 router.patch(
-    "/:serviceId/entries/:entryId/move",
-    requireRole("admin"),
-    validate({ direction: moveDirection }),
-    (req, res) => {
-      if (!moveDirections.includes(req.body.direction)) {
-        return res.status(400).json({
-          errors: [{ field: "direction", message: `Direction must be one of: ${moveDirections.join(", ")}.` }],
-        });
-      }
-      const service = findService(req.params.serviceId);
-      if (!service) {
-        return res.status(404).json({ message: "Service not found." });
-      }
-      const result = moveEntry(service.id, req.params.entryId, req.body.direction);
-      if (result.error === "not-found") {
-        return res.status(404).json({ message: "That person is not in this queue." });
-      }
-      if (result.error === "at-end") {
-        return res.status(409).json({ message: `Can't move ${req.body.direction} any further.` });
-      }
-      return res.json(adminQueueView(service));
+  "/:serviceId/entries/:entryId/move",
+  requireRole("admin"),
+  validate({ direction: moveDirection }),
+  (req, res) => {
+    if (!moveDirections.includes(req.body.direction)) {
+      return res.status(400).json({
+        errors: [{ field: "direction", message: `Direction must be one of: ${moveDirections.join(", ")}.` }],
+      });
     }
+    const service = findService(req.params.serviceId);
+    if (!service) {
+      return res.status(404).json({ message: "Service not found." });
+    }
+    const result = moveEntry(service.id, req.params.entryId, req.body.direction);
+    if (result.error === "not-found") {
+      return res.status(404).json({ message: "That person is not in this queue." });
+    }
+    if (result.error === "at-end") {
+      return res.status(409).json({ message: `Can't move ${req.body.direction} any further.` });
+    }
+    notifyAlmostServed(service);
+    return res.json(adminQueueView(service));
+  }
 );
 
 // for qm screen, change someone's priority; they're re-placed in line to match
