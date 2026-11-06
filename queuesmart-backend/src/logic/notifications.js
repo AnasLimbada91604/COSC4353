@@ -46,8 +46,6 @@ function notifyJoined({
     userId,
     entryId,
     type: NOTIFICATION_TYPES.JOINED,
-    serviceId: service.id,
-    serviceName: service.name,
     message: joinedMessage(service.name, position, estimatedWaitMinutes),
   });
 }
@@ -61,8 +59,6 @@ function notifyAlmostServed(service) {
         userId: entry.userId,
         entryId: entry.id,
         type: NOTIFICATION_TYPES.ALMOST_SERVED,
-        serviceId: service.id,
-        serviceName: service.name,
         message: almostServedMessage(service.name, position),
       }),
   );

@@ -1,10 +1,11 @@
 const express = require("express");
+const { withTransaction } = require("../db");
 const { validate } = require("../middleware/validate");
 const { authenticate, requireRole } = require("../middleware/authenticate");
 const { serviceId, moveDirection, entryPriority, moveDirections, priorityOptions } = require("../validation/rules");
-const { findService } = require("../store/services");
-const {findActiveEntry, joinQueue, leaveQueue, serveNext, getQueue, removeEntry, moveEntry, setEntryPriority,} = require("../store/queues");
-const { OUTCOMES, recordJoin, closeEntry, listHistory } = require("../store/history");
+const { findService, listServices } = require("../store/services");
+const {ENTRY_STATUS, findActiveEntry, findLatestEntry, joinQueue, leaveQueue, serveNext, getQueue, removeEntry, moveEntry, setEntryPriority,} = require("../store/queues");
+const { OUTCOMES, recordJoin, closeEntry } = require("../store/history");
 const {
   estimateWaitMinutes,
   estimateServeAt,
@@ -56,16 +57,22 @@ router.get("/status", (req, res) => {
     return res.json(buildStatus(found));
   }
 
-  const [latest] = listHistory(req.user.id);
-  if (latest && latest.outcome === OUTCOMES.SERVED) {
+  const latest = findLatestEntry(req.user.id);
+  if (latest && latest.status === ENTRY_STATUS.SERVED) {
+    const service = findService(latest.serviceId);
     return res.json({
       inQueue: false,
       status: "served",
-      service: { id: latest.serviceId, name: latest.serviceName },
+      service: { id: service.id, name: service.name },
       servedAt: latest.endedAt,
     });
   }
   return res.json({ inQueue: false });
+});
+
+// What a signed-in user can join. /api/services stays admin-only.
+router.get("/services", (req, res) => {
+  res.json({ services: listServices() });
 });
 
 // admin: everyone waiting for one service, in served order
@@ -108,8 +115,25 @@ router.post("/join", validate({ serviceId }), (req, res) => {
     return res.status(409).json({ message: "You can be in one queue at a time." });
   }
 
-  const joined = joinQueue(req.user.id, service);
-  const status = buildStatus(joined);
+  // Saved together, so a failed notification can't leave a half-finished join behind.
+  const { joined, status, notifications } = withTransaction(() => {
+    const entry = joinQueue(req.user.id, service);
+    const entryStatus = buildStatus(entry);
+    return {
+      joined: entry,
+      status: entryStatus,
+      notifications: [
+        notifyJoined({
+          userId: req.user.id,
+          entryId: entry.entry.id,
+          service,
+          position: entry.position,
+          estimatedWaitMinutes: entryStatus.estimatedWaitMinutes,
+        }),
+        ...notifyAlmostServed(service),
+      ].filter((notification) => notification.userId === req.user.id),
+    };
+  });
   recordJoin({
     userId: req.user.id,
     service,
@@ -117,26 +141,21 @@ router.post("/join", validate({ serviceId }), (req, res) => {
     estimatedWaitMinutes: status.estimatedWaitMinutes,
     joinedAt: joined.entry.joinedAt,
   });
-  const notifications = [
-    notifyJoined({
-      userId: req.user.id,
-      entryId: joined.entry.id,
-      service,
-      position: joined.position,
-      estimatedWaitMinutes: status.estimatedWaitMinutes,
-    }),
-    ...notifyAlmostServed(service),
-  ].filter((notification) => notification.userId === req.user.id);
   return res.status(201).json({ ...status, notifications });
 });
 
 router.post("/leave", (req, res) => {
-  const entry = leaveQueue(req.user.id);
+  const entry = withTransaction(() => {
+    const left = leaveQueue(req.user.id);
+    if (left) {
+      notifyAlmostServed(findService(left.serviceId));
+    }
+    return left;
+  });
   if (!entry) {
     return res.status(404).json({ message: "You are not in a queue." });
   }
   closeEntry(req.user.id, OUTCOMES.LEFT);
-  notifyAlmostServed(findService(entry.serviceId));
   return res.json({ inQueue: false });
 });
 

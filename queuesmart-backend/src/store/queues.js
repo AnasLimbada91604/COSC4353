@@ -1,81 +1,118 @@
-const { listServices } = require("./services");
+const { getDb, withTransaction } = require("../db");
+const { seedWalkIns } = require("./services");
 
 const PRIORITY_RANK = { High: 3, Medium: 2, Low: 1 };
+const ENTRY_STATUS = { WAITING: "waiting", SERVED: "served", CANCELED: "canceled" };
 
-let queues = new Map();
-let nextEntryId = 1;
+const ENTRY_COLUMNS = `
+  SELECT e.id, e.user_id, q.service_id, e.position, e.priority, e.join_time, e.ended_at, e.status
+  FROM queue_entry e
+  INNER JOIN queue q ON q.id = e.queue_id
+`;
 
-function createEntry(userId, service) {
-  const entry = {
-    id: nextEntryId,
-    userId,
-    serviceId: service.id,
-    priority: service.priority,
-    joinedAt: new Date().toISOString(),
+function rowToEntry(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    serviceId: row.service_id,
+    position: row.position,
+    priority: row.priority,
+    joinedAt: row.join_time,
+    endedAt: row.ended_at,
+    status: row.status,
   };
-  nextEntryId += 1;
-  return entry;
 }
 
 function resetQueues() {
-  queues = new Map();
-  nextEntryId = 1;
-  // Placeholder people so each line starts at the seeded queueLength.
-  for (const service of listServices()) {
-    const line = [];
-    for (let i = 0; i < service.queueLength; i += 1) {
-      line.push(createEntry(null, service));
-    }
-    queues.set(service.id, line);
-  }
+  withTransaction((db) => {
+    // Deleting an entry cascades to its notifications.
+    db.exec(`
+      DELETE FROM queue_entry;
+      DELETE FROM sqlite_sequence WHERE name = 'queue_entry';
+    `);
+    seedWalkIns(db);
+  });
 }
 
-function lineFor(serviceId) {
-  if (!queues.has(serviceId)) {
-    queues.set(serviceId, []);
-  }
-  return queues.get(serviceId);
+function lineFor(db, serviceId) {
+  return db
+    .prepare(`${ENTRY_COLUMNS} WHERE q.service_id = ? AND e.status = 'waiting' ORDER BY e.position`)
+    .all(serviceId)
+    .map(rowToEntry);
+}
+
+// Writes each person's place in line back to the database after the line changes.
+function savePositions(db, line) {
+  const update = db.prepare("UPDATE queue_entry SET position = ? WHERE id = ?");
+  line.forEach((entry, index) => {
+    const position = index + 1;
+    if (entry.position !== position) {
+      update.run(position, entry.id);
+      entry.position = position;
+    }
+  });
+}
+
+// Takes an entry out of the line for good, keeping its row as a record of the visit.
+function endEntry(db, entry, status) {
+  const endedAt = new Date().toISOString();
+  db.prepare("UPDATE queue_entry SET status = ?, ended_at = ? WHERE id = ?").run(status, endedAt, entry.id);
+  savePositions(db, lineFor(db, entry.serviceId));
+  return { ...entry, status, endedAt };
 }
 
 function findActiveEntry(userId) {
-  for (const [serviceId, line] of queues) {
-    const index = line.findIndex((entry) => entry.userId === userId);
-    if (index !== -1) {
-      return { entry: { ...line[index] }, position: index + 1, serviceId };
-    }
-  }
-  return null;
+  const row = getDb()
+    .prepare(`${ENTRY_COLUMNS} WHERE e.user_id = ? AND e.status = 'waiting'`)
+    .get(userId);
+  if (!row) return null;
+  const entry = rowToEntry(row);
+  return { entry, position: entry.position, serviceId: entry.serviceId };
+}
+
+// The user's most recent visit, whatever its status.
+function findLatestEntry(userId) {
+  const row = getDb()
+    .prepare(`${ENTRY_COLUMNS} WHERE e.user_id = ? ORDER BY e.id DESC LIMIT 1`)
+    .get(userId);
+  return row ? rowToEntry(row) : null;
 }
 
 function joinQueue(userId, service) {
-  const line = lineFor(service.id);
-  const entry = createEntry(userId, service);
-  // Same rule as insertByPriority in QueueManagement.jsx: behind everyone of equal or higher priority.
-  let index = 0;
-  while (
-    index < line.length &&
-    PRIORITY_RANK[line[index].priority] >= PRIORITY_RANK[entry.priority]
-  ) {
-    index += 1;
-  }
-  line.splice(index, 0, entry);
-  return { entry: { ...entry }, position: index + 1, serviceId: service.id };
+  return withTransaction((db) => {
+    const line = lineFor(db, service.id);
+    const inserted = db
+      .prepare(`
+        INSERT INTO queue_entry (queue_id, user_id, position, priority, join_time)
+        SELECT id, ?, ?, ?, ? FROM queue WHERE service_id = ?
+      `)
+      .run(userId, line.length + 1, service.priority, new Date().toISOString(), service.id);
+    const entry = rowToEntry(
+      db.prepare(`${ENTRY_COLUMNS} WHERE e.id = ?`).get(Number(inserted.lastInsertRowid)),
+    );
+    // Same rule as insertByPriority in QueueManagement.jsx: behind everyone of equal or higher priority.
+    insertByPriority(line, entry);
+    savePositions(db, line);
+    return { entry, position: entry.position, serviceId: service.id };
+  });
 }
 
 function leaveQueue(userId) {
-  const found = findActiveEntry(userId);
-  if (!found) return null;
-  lineFor(found.serviceId).splice(found.position - 1, 1);
-  return found.entry;
+  return withTransaction((db) => {
+    const found = findActiveEntry(userId);
+    return found ? endEntry(db, found.entry, ENTRY_STATUS.CANCELED) : null;
+  });
 }
 
 function serveNext(serviceId) {
-  const line = lineFor(serviceId);
-  return line.length > 0 ? line.shift() : null;
+  return withTransaction((db) => {
+    const [next] = lineFor(db, serviceId);
+    return next ? endEntry(db, next, ENTRY_STATUS.SERVED) : null;
+  });
 }
 
 function getQueue(serviceId) {
-  return lineFor(Number(serviceId)).map((entry) => ({ ...entry }))
+  return lineFor(getDb(), Number(serviceId));
 }
 
 // place entry by priority -> back of its group, or front when atFront is true
@@ -83,9 +120,9 @@ function insertByPriority(line, entry, atFront = false) {
   const rank = PRIORITY_RANK[entry.priority];
   let index = 0;
   while (
-      index < line.length &&
-      (atFront ? PRIORITY_RANK[line[index].priority] > rank : PRIORITY_RANK[line[index].priority] >= rank)
-      ) {
+    index < line.length &&
+    (atFront ? PRIORITY_RANK[line[index].priority] > rank : PRIORITY_RANK[line[index].priority] >= rank)
+  ) {
     index += 1;
   }
   line.splice(index, 0, entry);
@@ -97,43 +134,62 @@ function findEntryIndex(line, entryId) {
 
 // remove for queue screen
 function removeEntry(serviceId, entryId) {
-  const line = lineFor(Number(serviceId));
-  const index = findEntryIndex(line, entryId);
-  if (index === -1) return null;
-  const [removed] = line.splice(index, 1);
-  return { ...removed };
+  return withTransaction((db) => {
+    const line = lineFor(db, Number(serviceId));
+    const index = findEntryIndex(line, entryId);
+    return index === -1 ? null : endEntry(db, line[index], ENTRY_STATUS.CANCELED);
+  });
 }
 
 // swap with the neighbor -> crossing into another group takes that group's priority
 function moveEntry(serviceId, entryId, direction) {
-  const line = lineFor(Number(serviceId));
-  const index = findEntryIndex(line, entryId);
-  if (index === -1) return { error: "not-found" };
-  const target = index + (direction === "up" ? -1 : 1);
-  if (target < 0 || target >= line.length) return { error: "at-end" };
+  return withTransaction((db) => {
+    const line = lineFor(db, Number(serviceId));
+    const index = findEntryIndex(line, entryId);
+    if (index === -1) return { error: "not-found" };
+    const target = index + (direction === "up" ? -1 : 1);
+    if (target < 0 || target >= line.length) return { error: "at-end" };
 
-  const entry = line[index];
-  const neighbor = line[target];
-  line[index] = neighbor;
-  line[target] = { ...entry, priority: neighbor.priority };
-  return { entry: { ...line[target] } };
+    const entry = line[index];
+    const neighbor = line[target];
+    line[index] = neighbor;
+    line[target] = entry;
+    entry.priority = neighbor.priority;
+    db.prepare("UPDATE queue_entry SET priority = ? WHERE id = ?").run(entry.priority, entry.id);
+    savePositions(db, line);
+    return { entry };
+  });
 }
 
 // find where to place the entry, then remove it and place it there
 function setEntryPriority(serviceId, entryId, priority) {
-  const line = lineFor(Number(serviceId));
-  const index = findEntryIndex(line, entryId);
-  if (index === -1) return null;
-  const entry = line[index];
-  if (entry.priority === priority) return { ...entry };
+  return withTransaction((db) => {
+    const line = lineFor(db, Number(serviceId));
+    const index = findEntryIndex(line, entryId);
+    if (index === -1) return null;
+    const entry = line[index];
+    if (entry.priority === priority) return entry;
 
-  const isLowering = PRIORITY_RANK[priority] < PRIORITY_RANK[entry.priority];
-  line.splice(index, 1);
-  const updated = { ...entry, priority };
-  insertByPriority(line, updated, isLowering);
-  return { ...updated };
+    const isLowering = PRIORITY_RANK[priority] < PRIORITY_RANK[entry.priority];
+    line.splice(index, 1);
+    entry.priority = priority;
+    insertByPriority(line, entry, isLowering);
+    db.prepare("UPDATE queue_entry SET priority = ? WHERE id = ?").run(priority, entry.id);
+    savePositions(db, line);
+    return entry;
+  });
 }
 
-resetQueues();
-
-module.exports = {resetQueues, findActiveEntry, joinQueue, leaveQueue, serveNext, getQueue, removeEntry, moveEntry, setEntryPriority,};
+module.exports = {
+  ENTRY_STATUS,
+  resetQueues,
+  findActiveEntry,
+  findLatestEntry,
+  joinQueue,
+  leaveQueue,
+  serveNext,
+  getQueue,
+  removeEntry,
+  moveEntry,
+  setEntryPriority,
+};

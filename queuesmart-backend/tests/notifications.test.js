@@ -2,15 +2,18 @@ const assert = require("node:assert/strict");
 const { describe, test, beforeEach, afterEach } = require("node:test");
 const { once } = require("events");
 const createApp = require("../src/app");
+const { getDb } = require("../src/db");
 const { resetUsers } = require("../src/store/users");
-const { resetServices } = require("../src/store/services");
-const { resetQueues } = require("../src/store/queues");
+const { resetServices, findService } = require("../src/store/services");
+const { resetQueues, joinQueue } = require("../src/store/queues");
 const { resetHistory } = require("../src/store/history");
 const {
+  NOTIFICATION_STATUS,
   resetNotifications,
   addNotification,
   listNotifications,
   hasNotification,
+  markViewed,
 } = require("../src/store/notifications");
 const {
   NOTIFICATION_TYPES,
@@ -19,6 +22,7 @@ const {
   almostServedMessage,
   findNewlyAlmostServed,
 } = require("../src/logic/notifications");
+const { addUser } = require("./dbHelpers");
 const { send } = require("./http");
 
 function resetAll() {
@@ -72,27 +76,21 @@ describe("notification rules", () => {
 });
 
 describe("notification store", () => {
-  beforeEach(resetNotifications);
+  let firstEntry;
+  let secondEntry;
+
+  beforeEach(() => {
+    resetAll();
+    addUser(1);
+    addUser(2);
+    firstEntry = joinQueue(1, findService(1)).entry.id;
+    secondEntry = joinQueue(2, findService(2)).entry.id;
+  });
 
   test("lists only one user's notifications, newest first", () => {
-    addNotification({
-      userId: 1,
-      entryId: 5,
-      type: "joined",
-      message: "first",
-    });
-    addNotification({
-      userId: 2,
-      entryId: 6,
-      type: "joined",
-      message: "other user",
-    });
-    addNotification({
-      userId: 1,
-      entryId: 5,
-      type: "almost-served",
-      message: "second",
-    });
+    addNotification({ userId: 1, entryId: firstEntry, type: "joined", message: "first" });
+    addNotification({ userId: 2, entryId: secondEntry, type: "joined", message: "other user" });
+    addNotification({ userId: 1, entryId: firstEntry, type: "almost-served", message: "second" });
 
     const messages = listNotifications(1).map(
       (notification) => notification.message,
@@ -101,16 +99,62 @@ describe("notification store", () => {
   });
 
   test("knows whether an entry already got a type of notification", () => {
-    addNotification({ userId: 1, entryId: 5, type: "joined", message: "hi" });
-    assert.equal(hasNotification(5, "joined"), true);
-    assert.equal(hasNotification(5, "almost-served"), false);
-    assert.equal(hasNotification(6, "joined"), false);
+    addNotification({ userId: 1, entryId: firstEntry, type: "joined", message: "hi" });
+    assert.equal(hasNotification(firstEntry, "joined"), true);
+    assert.equal(hasNotification(firstEntry, "almost-served"), false);
+    assert.equal(hasNotification(secondEntry, "joined"), false);
   });
 
   test("starts empty after a reset", () => {
-    addNotification({ userId: 1, entryId: 5, type: "joined", message: "hi" });
+    addNotification({ userId: 1, entryId: firstEntry, type: "joined", message: "hi" });
     resetNotifications();
     assert.deepEqual(listNotifications(1), []);
+  });
+
+  test("saves a new notification as sent, with no viewed time", () => {
+    const saved = addNotification({ userId: 1, entryId: firstEntry, type: "joined", message: "hi" });
+
+    assert.equal(saved.status, NOTIFICATION_STATUS.SENT);
+    assert.equal(saved.viewedAt, null);
+    assert.equal(new Date(saved.createdAt).toISOString(), saved.createdAt);
+  });
+
+  test("looks up which service a notification is about", () => {
+    const saved = addNotification({ userId: 2, entryId: secondEntry, type: "joined", message: "hi" });
+    assert.equal(saved.serviceId, 2);
+    assert.equal(saved.serviceName, "Financial Aid");
+  });
+
+  test("allows a notification that isn't tied to a queue entry", () => {
+    const saved = addNotification({ userId: 1, type: "joined", message: "hi" });
+    assert.equal(saved.entryId, null);
+    assert.equal(saved.serviceName, null);
+  });
+
+  test("marks a notification viewed and saves the time", () => {
+    const saved = addNotification({ userId: 1, entryId: firstEntry, type: "joined", message: "hi" });
+
+    const viewed = markViewed(1, saved.id);
+
+    assert.equal(viewed.status, NOTIFICATION_STATUS.VIEWED);
+    assert.equal(new Date(viewed.viewedAt).toISOString(), viewed.viewedAt);
+    assert.equal(listNotifications(1)[0].status, NOTIFICATION_STATUS.VIEWED);
+  });
+
+  test("keeps the first viewed time when marked twice", () => {
+    const saved = addNotification({ userId: 1, entryId: firstEntry, type: "joined", message: "hi" });
+    const stored = "2026-01-01T00:00:00.000Z";
+    getDb().prepare("UPDATE notification SET status = 'viewed', viewed_at = ? WHERE id = ?").run(stored, saved.id);
+
+    assert.equal(markViewed(1, saved.id).viewedAt, stored);
+  });
+
+  test("won't mark another user's notification, or one that doesn't exist", () => {
+    const saved = addNotification({ userId: 1, entryId: firstEntry, type: "joined", message: "hi" });
+
+    assert.equal(markViewed(2, saved.id), null);
+    assert.equal(markViewed(1, 999), null);
+    assert.equal(listNotifications(1)[0].status, NOTIFICATION_STATUS.SENT);
   });
 });
 
@@ -281,5 +325,59 @@ describe("notification endpoints", () => {
     const second = await signIn("second@queuesmart.edu");
     await join(first, 1);
     assert.deepEqual(await notificationsFor(second), []);
+  });
+
+  const markAsViewed = (token, id) =>
+    send(base, `/api/notifications/${id}/viewed`, { method: "PATCH", token });
+
+  test("returns new notifications with a sent status", async () => {
+    const token = await signIn("student@queuesmart.edu");
+    const joined = await join(token, 1);
+
+    assert.equal(joined.body.notifications[0].status, "sent");
+    assert.equal((await notificationsFor(token))[0].status, "sent");
+  });
+
+  test("marks a notification viewed, and it stays viewed", async () => {
+    const token = await signIn("student@queuesmart.edu");
+    await join(token, 1);
+    const [notification] = await notificationsFor(token);
+
+    const response = await markAsViewed(token, notification.id);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.notification.status, "viewed");
+    assert.notEqual(response.body.notification.viewedAt, null);
+    assert.equal((await notificationsFor(token))[0].status, "viewed");
+  });
+
+  test("won't let one user mark another user's notification", async () => {
+    const owner = await signIn("owner@queuesmart.edu");
+    const other = await signIn("other@queuesmart.edu");
+    await join(owner, 1);
+    const [notification] = await notificationsFor(owner);
+
+    const response = await markAsViewed(other, notification.id);
+
+    assert.equal(response.status, 404);
+    assert.equal((await notificationsFor(owner))[0].status, "sent");
+  });
+
+  test("returns 404 for a notification that doesn't exist", async () => {
+    const token = await signIn("student@queuesmart.edu");
+    assert.equal((await markAsViewed(token, 999)).status, 404);
+  });
+
+  test("rejects a notification id that isn't a positive whole number", async () => {
+    const token = await signIn("student@queuesmart.edu");
+    for (const id of ["abc", "0", "-1", "1.5"]) {
+      const response = await markAsViewed(token, id);
+      assert.equal(response.status, 400);
+      assert.equal(response.body.errors[0].field, "id");
+    }
+  });
+
+  test("requires a token to mark a notification viewed", async () => {
+    assert.equal((await markAsViewed(undefined, 1)).status, 401);
   });
 });

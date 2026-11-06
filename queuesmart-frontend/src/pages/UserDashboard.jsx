@@ -6,8 +6,12 @@ import { formatWait, servicesFrom } from "../queueDisplay";
 
 const NOTIFICATIONS_SHOWN = 5;
 
-function formatTime(isoString) {
-  return new Date(isoString).toLocaleTimeString([], {
+const NOTIFICATION_STATUS_LABELS = { sent: "Sent", viewed: "Viewed" };
+
+function formatDateTime(isoString) {
+  return new Date(isoString).toLocaleString([], {
+    month: "short",
+    day: "numeric",
     hour: "numeric",
     minute: "2-digit",
   });
@@ -21,13 +25,14 @@ function UserDashboard() {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notificationError, setNotificationError] = useState("");
 
   useEffect(() => {
     async function load() {
       try {
         const [statusData, servicesData, notificationData] = await Promise.all([
           api("/queue/status"),
-          api("/services"),
+          api("/queue/services"),
           api("/notifications"),
         ]);
         const open = servicesFrom(servicesData).filter(
@@ -54,6 +59,20 @@ function UserDashboard() {
     }
     load();
   }, []);
+
+  async function markViewed(id) {
+    try {
+      const { notification } = await api(`/notifications/${id}/viewed`, {
+        method: "PATCH",
+      });
+      setNotifications((current) =>
+        current.map((item) => (item.id === id ? notification : item)),
+      );
+      setNotificationError("");
+    } catch (err) {
+      setNotificationError(err.message);
+    }
+  }
 
   if (loading) {
     return (
@@ -128,6 +147,7 @@ function UserDashboard() {
       )}
 
       <h2>Notifications</h2>
+      {notificationError && <p role="alert">{notificationError}</p>}
       {notifications.length === 0 ? (
         <p>
           No notifications yet. You'll get one when you join a queue and when
@@ -137,7 +157,14 @@ function UserDashboard() {
         <ul>
           {notifications.slice(0, NOTIFICATIONS_SHOWN).map((notification) => (
             <li key={notification.id}>
-              {notification.message} ({formatTime(notification.createdAt)})
+              {notification.message} ({formatDateTime(notification.createdAt)}).
+              Status: {NOTIFICATION_STATUS_LABELS[notification.status]}{" "}
+              {notification.status === "sent" && (
+                <QuickActionButton
+                  label="Mark as viewed"
+                  onClick={() => markViewed(notification.id)}
+                />
+              )}
             </li>
           ))}
         </ul>

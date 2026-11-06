@@ -25,7 +25,7 @@ function JoinQueue() {
   const loadPage = useCallback(async () => {
     try {
       const [servicesData, statusData] = await Promise.all([
-        api("/services"),
+        api("/queue/services"),
         api("/queue/status"),
       ]);
       const list = servicesFrom(servicesData);
@@ -77,6 +77,8 @@ function JoinQueue() {
           `You joined ${joined.service.name}.`,
       );
       setError("");
+      // The line just got longer, so refresh the estimate.
+      setEstimate(await api(`/queue/${selectedId}/estimate`));
     } catch (err) {
       setError(err.message);
     } finally {

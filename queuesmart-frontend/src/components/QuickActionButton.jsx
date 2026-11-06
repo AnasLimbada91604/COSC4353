@@ -1,6 +1,11 @@
-function QuickActionButton({ label, onClick }) {
+function QuickActionButton({ label, onClick, disabled = false }) {
   return (
-    <button type="button" className="quick-action-button" onClick={onClick}>
+    <button
+      type="button"
+      className="quick-action-button"
+      onClick={onClick}
+      disabled={disabled}
+    >
       {label}
     </button>
   );

@@ -47,6 +47,30 @@ function serve(token, serviceId) {
   return send(base, `/api/queue/${serviceId}/serve`, { method: "POST", token });
 }
 
+describe("services a user can join", () => {
+  test("requires a token", async () => {
+    assert.equal((await send(base, "/api/queue/services")).status, 401);
+  });
+
+  test("lists open and closed services with their current line length", async () => {
+    const token = await signIn("student@queuesmart.edu");
+    const before = await send(base, "/api/queue/services", { token });
+    await join(token, 1);
+    const after = await send(base, "/api/queue/services", { token });
+
+    assert.equal(before.status, 200);
+    assert.equal(before.body.services.length, 4);
+    assert.equal(before.body.services[0].queueLength, 4);
+    assert.equal(before.body.services.find((service) => service.id === 3).isOpen, false);
+    assert.equal(after.body.services[0].queueLength, 5);
+  });
+
+  test("keeps the admin services list admin-only", async () => {
+    const token = await signIn("student@queuesmart.edu");
+    assert.equal((await send(base, "/api/services", { token })).status, 403);
+  });
+});
+
 describe("queue status and history endpoints", () => {
   test("requires a token", async () => {
     const status = await send(base, "/api/queue/status");
