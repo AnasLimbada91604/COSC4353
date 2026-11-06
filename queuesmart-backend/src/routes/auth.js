@@ -4,7 +4,7 @@ const jwt = require("jsonwebtoken");
 const { getSecret } = require("../config");
 const { validate } = require("../middleware/validate");
 const { authenticate } = require("../middleware/authenticate");
-const { email, password, role } = require("../validation/rules");
+const { fullName, email, password, role } = require("../validation/rules");
 const { createUser, findByEmail, toPublic } = require("../store/users");
 
 const router = express.Router();
@@ -15,7 +15,7 @@ function signToken(user) {
   return jwt.sign({ sub: user.id, role: user.role }, getSecret(), { expiresIn: "8h" });
 }
 
-router.post("/register", validate({ email, password, role }), async (req, res, next) => {
+router.post("/register", validate({ fullName, email, password, role }), async (req, res, next) => {
   try {
     const errors = [];
     if (!EMAIL_PATTERN.test(req.body.email)) {
@@ -31,13 +31,8 @@ router.post("/register", validate({ email, password, role }), async (req, res, n
       return res.status(400).json({ errors });
     }
 
-    if (findByEmail(req.body.email)) {
-      return res.status(409).json({
-        errors: [{ field: "email", message: "An account with that email already exists." }],
-      });
-    }
-
     const user = await createUser({
+      fullName: req.body.fullName,
       email: req.body.email,
       password: req.body.password,
       role: normalizedRole,
@@ -45,6 +40,11 @@ router.post("/register", validate({ email, password, role }), async (req, res, n
 
     return res.status(201).json({ user: toPublic(user) });
   } catch (error) {
+    if (error.code === "EMAIL_TAKEN") {
+      return res.status(409).json({
+        errors: [{ field: "email", message: "An account with that email already exists." }],
+      });
+    }
     return next(error);
   }
 });

@@ -3,6 +3,7 @@ const { describe, test, beforeEach, afterEach } = require("node:test");
 const { once } = require("events");
 const createApp = require("../src/app");
 const { resetUsers, findByEmail } = require("../src/store/users");
+const { getDb } = require("../src/db");
 const { resetServices } = require("../src/store/services");
 const { send } = require("./http");
 
@@ -27,6 +28,7 @@ function register(body = {}) {
   return send(base, "/api/auth/register", {
     method: "POST",
     body: {
+      fullName: "Alex Student",
       email: "student@queuesmart.edu",
       password: "password123",
       role: "user",
@@ -51,12 +53,41 @@ describe("auth", () => {
       id: 1,
       email: "student@queuesmart.edu",
       role: "user",
+      fullName: "Alex Student",
     });
     assert.equal(response.body.token, undefined);
+    assert.equal(response.body.user.passwordHash, undefined);
 
     const stored = findByEmail("student@queuesmart.edu");
     assert.equal(stored.password, undefined);
+    assert.equal(stored.fullName, "Alex Student");
     assert.notEqual(stored.passwordHash, "password123");
+
+    const database = getDb();
+    const tables = database
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('user_credentials', 'user_profile') ORDER BY name"
+      )
+      .all()
+      .map((row) => row.name);
+    assert.deepEqual(tables, ["user_credentials", "user_profile"]);
+
+    const credential = database
+      .prepare("SELECT email, password_hash, role FROM user_credentials WHERE id = ?")
+      .get(1);
+    const profile = database
+      .prepare("SELECT full_name FROM user_profile WHERE user_id = ?")
+      .get(1);
+    assert.equal(credential.email, "student@queuesmart.edu");
+    assert.equal(credential.role, "user");
+    assert.notEqual(credential.password_hash, "password123");
+    assert.equal(profile.full_name, "Alex Student");
+    assert.equal(
+      database.prepare("SELECT sql FROM sqlite_master WHERE name = 'user_credentials'").get().sql.includes(
+        "email TEXT NOT NULL COLLATE NOCASE UNIQUE"
+      ),
+      true
+    );
   });
 
   test("registers an admin and returns that role from login", async () => {
@@ -82,13 +113,35 @@ describe("auth", () => {
     assert.equal(response.body.user.role, "user");
   });
 
-  test("rejects a duplicate email", async () => {
+  test("rejects a duplicate email because the database requires unique emails", async () => {
     await register();
-    const response = await register({ email: "STUDENT@queuesmart.edu" });
+    const response = await register({
+      email: "STUDENT@queuesmart.edu",
+      fullName: "Someone Else",
+    });
 
     assert.equal(response.status, 409);
     assert.deepEqual(response.body.errors, [
       { field: "email", message: "An account with that email already exists." },
+    ]);
+    assert.equal(getDb().prepare("SELECT COUNT(*) AS count FROM user_credentials").get().count, 1);
+    assert.throws(
+      () =>
+        getDb()
+          .prepare(
+            "INSERT INTO user_credentials (email, password_hash, role) VALUES (?, ?, ?)"
+          )
+          .run("Student@QueueSmart.edu", "hash", "user"),
+      /UNIQUE constraint failed: user_credentials\.email/
+    );
+  });
+
+  test("rejects registration without a full name", async () => {
+    const response = await register({ fullName: "   " });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(response.body.errors, [
+      { field: "fullName", message: "Full name is required." },
     ]);
   });
 
@@ -147,6 +200,7 @@ describe("auth", () => {
     assert.equal(response.status, 200);
     assert.equal(response.body.user.email, "student@queuesmart.edu");
     assert.equal(response.body.user.role, "user");
+    assert.equal(response.body.user.fullName, "Alex Student");
   });
 
   test("rejects a missing or invalid token", async () => {

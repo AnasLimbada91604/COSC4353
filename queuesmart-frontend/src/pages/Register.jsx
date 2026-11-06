@@ -1,17 +1,28 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { api } from "../api";
 
 const MIN_PASSWORD_LENGTH = 8;
+const MAX_NAME_LENGTH = 100;
 
 function Register() {
   const navigate = useNavigate();
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function validate(emailValue, passwordValue) {
+  function validate(nameValue, emailValue, passwordValue) {
     const nextErrors = {};
+    const trimmedName = nameValue.trim();
     const trimmedEmail = emailValue.trim();
+
+    if (!trimmedName) {
+      nextErrors.fullName = "Full name is required.";
+    } else if (trimmedName.length > MAX_NAME_LENGTH) {
+      nextErrors.fullName = `Full name must be at most ${MAX_NAME_LENGTH} characters.`;
+    }
 
     if (!trimmedEmail) {
       nextErrors.email = "Email is required.";
@@ -28,13 +39,32 @@ function Register() {
     return nextErrors;
   }
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault();
-    const nextErrors = validate(email, password);
+    const nextErrors = validate(fullName, email, password);
     setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
 
-    if (Object.keys(nextErrors).length === 0) {
+    setIsSubmitting(true);
+    try {
+      await api("/auth/register", {
+        method: "POST",
+        body: {
+          fullName: fullName.trim(),
+          email: email.trim(),
+          password,
+          role: "user",
+        },
+      });
       navigate("/login");
+    } catch (error) {
+      if (error.errors) {
+        setErrors(Object.fromEntries(error.errors.map((item) => [item.field, item.message])));
+      } else {
+        setErrors({ form: error.message });
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -42,6 +72,20 @@ function Register() {
     <main>
       <h1>Register</h1>
       <form onSubmit={handleSubmit} noValidate>
+        <div>
+          <label htmlFor="register-name">Full name</label>
+          <input
+            id="register-name"
+            name="fullName"
+            type="text"
+            value={fullName}
+            onChange={(event) => setFullName(event.target.value)}
+            maxLength={MAX_NAME_LENGTH}
+            aria-invalid={Boolean(errors.fullName)}
+            aria-describedby={errors.fullName ? "register-name-error" : undefined}
+          />
+          {errors.fullName && <p id="register-name-error">{errors.fullName}</p>}
+        </div>
         <div>
           <label htmlFor="register-email">Email</label>
           <input
@@ -68,7 +112,10 @@ function Register() {
           />
           {errors.password && <p id="register-password-error">{errors.password}</p>}
         </div>
-        <button type="submit">Register</button>
+        {errors.form && <p role="alert">{errors.form}</p>}
+        <button type="submit" disabled={isSubmitting}>
+          Register
+        </button>
       </form>
     </main>
   );

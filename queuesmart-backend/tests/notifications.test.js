@@ -134,7 +134,7 @@ describe("notification endpoints", () => {
   async function signIn(email, role = "user") {
     await send(base, "/api/auth/register", {
       method: "POST",
-      body: { email, password: "password123", role },
+      body: { fullName: "Test User", email, password: "password123", role },
     });
     const response = await send(base, "/api/auth/login", {
       method: "POST",

@@ -28,7 +28,7 @@ async function loginAs(role) {
     const email = `${role}@queuesmart.edu`;
     await send(base, "/api/auth/register", {
         method: "POST",
-        body: { email, password: "password123", role },
+        body: { fullName: "Test User", email, password: "password123", role },
     });
     const signedIn = await send(base, "/api/auth/login", {
         method: "POST",

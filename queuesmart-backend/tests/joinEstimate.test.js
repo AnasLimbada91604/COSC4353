@@ -33,7 +33,7 @@ describe("join estimate endpoint", () => {
   async function signIn(email) {
     await send(base, "/api/auth/register", {
       method: "POST",
-      body: { email, password: "password123", role: "user" },
+      body: { fullName: "Test User", email, password: "password123", role: "user" },
     });
     const response = await send(base, "/api/auth/login", {
       method: "POST",

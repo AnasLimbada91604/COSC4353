@@ -1,3 +1,11 @@
+const fullName = {
+  required: true,
+  type: "string",
+  trim: true,
+  maxLength: 100,
+  label: "Full name",
+};
+
 const email = {
   required: true,
   type: "string",
@@ -83,4 +91,4 @@ const serviceId = {
     label: "Service",
 };
 
-module.exports = { email, password, role, isOpen, serviceId, serviceName, serviceDescription, serviceDuration, servicePriority, moveDirection, entryPriority, priorityOptions, moveDirections, maxDuration };
+module.exports = { fullName, email, password, role, isOpen, serviceId, serviceName, serviceDescription, serviceDuration, servicePriority, moveDirection, entryPriority, priorityOptions, moveDirections, maxDuration };

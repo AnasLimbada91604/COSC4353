@@ -6,11 +6,13 @@ async function seedAccounts() {
   if (countUsers() > 0) return;
 
   await createUser({
+    fullName: "Queue Admin",
     email: "admin@queuesmart.edu",
     password: "Admin12345",
     role: "admin",
   });
   await createUser({
+    fullName: "Queue User",
     email: "user@queuesmart.edu",
     password: "User12345",
     role: "user",
