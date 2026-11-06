@@ -5,7 +5,6 @@ const createApp = require("../src/app");
 const { resetUsers } = require("../src/store/users");
 const { resetServices } = require("../src/store/services");
 const { resetQueues } = require("../src/store/queues");
-const { resetHistory } = require("../src/store/history");
 const { resetNotifications } = require("../src/store/notifications");
 const { send } = require("./http");
 
@@ -17,7 +16,6 @@ describe("join estimate endpoint", () => {
     resetUsers();
     resetServices();
     resetQueues();
-    resetHistory();
     resetNotifications();
     server = createApp().listen(0, "127.0.0.1");
     await once(server, "listening");

@@ -19,15 +19,17 @@ function addEntry({
   priority = "Low",
   joinTime = NOW,
   status = "waiting",
+  endReason = null,
 } = {}) {
   return run(
-    "INSERT INTO queue_entry (queue_id, user_id, position, priority, join_time, status) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO queue_entry (queue_id, user_id, position, priority, join_time, status, end_reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
     queueId,
     userId,
     position,
     priority,
     joinTime,
     status,
+    endReason,
   );
 }
 
@@ -115,13 +117,25 @@ describe("queue_entry table", () => {
 
   test("allows a new waiting entry once the old one has ended", () => {
     addEntry({ status: "served" });
-    addEntry({ status: "canceled" });
+    addEntry({ status: "canceled", endReason: "left" });
     assert.doesNotThrow(() => addEntry());
   });
 
   test("allows many walk-ins, who have no user", () => {
     addEntry({ userId: null });
     assert.doesNotThrow(() => addEntry({ userId: null }));
+  });
+
+  test("rejects an unknown end reason", () => {
+    assert.throws(() => addEntry({ status: "canceled", endReason: "quit" }), /CHECK/);
+  });
+
+  test("requires a reason when an entry is canceled", () => {
+    assert.throws(() => addEntry({ status: "canceled" }), /CHECK/);
+  });
+
+  test("rejects a reason on an entry that wasn't canceled", () => {
+    assert.throws(() => addEntry({ status: "served", endReason: "left" }), /CHECK/);
   });
 });
 

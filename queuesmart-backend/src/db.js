@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS queue_entry (
   join_time TEXT NOT NULL,
   ended_at TEXT,
   status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'served', 'canceled')),
+  end_reason TEXT CHECK (end_reason IS NULL OR end_reason IN ('left', 'removed')),
+  CHECK ((status = 'canceled') = (end_reason IS NOT NULL)),
   FOREIGN KEY (queue_id) REFERENCES queue (id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES user_credentials (id) ON DELETE CASCADE
 );

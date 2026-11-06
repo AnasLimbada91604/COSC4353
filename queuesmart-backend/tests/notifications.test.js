@@ -6,7 +6,6 @@ const { getDb } = require("../src/db");
 const { resetUsers } = require("../src/store/users");
 const { resetServices, findService } = require("../src/store/services");
 const { resetQueues, joinQueue } = require("../src/store/queues");
-const { resetHistory } = require("../src/store/history");
 const {
   NOTIFICATION_STATUS,
   resetNotifications,
@@ -29,7 +28,6 @@ function resetAll() {
   resetUsers();
   resetServices();
   resetQueues();
-  resetHistory();
   resetNotifications();
 }
 

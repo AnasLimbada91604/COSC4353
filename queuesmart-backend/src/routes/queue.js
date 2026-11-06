@@ -5,7 +5,6 @@ const { authenticate, requireRole } = require("../middleware/authenticate");
 const { serviceId, moveDirection, entryPriority, moveDirections, priorityOptions } = require("../validation/rules");
 const { findService, listServices } = require("../store/services");
 const {ENTRY_STATUS, findActiveEntry, findLatestEntry, joinQueue, leaveQueue, serveNext, getQueue, removeEntry, moveEntry, setEntryPriority,} = require("../store/queues");
-const { OUTCOMES, recordJoin, closeEntry } = require("../store/history");
 const {
   estimateWaitMinutes,
   estimateServeAt,
@@ -116,11 +115,10 @@ router.post("/join", validate({ serviceId }), (req, res) => {
   }
 
   // Saved together, so a failed notification can't leave a half-finished join behind.
-  const { joined, status, notifications } = withTransaction(() => {
+  const { status, notifications } = withTransaction(() => {
     const entry = joinQueue(req.user.id, service);
     const entryStatus = buildStatus(entry);
     return {
-      joined: entry,
       status: entryStatus,
       notifications: [
         notifyJoined({
@@ -133,13 +131,6 @@ router.post("/join", validate({ serviceId }), (req, res) => {
         ...notifyAlmostServed(service),
       ].filter((notification) => notification.userId === req.user.id),
     };
-  });
-  recordJoin({
-    userId: req.user.id,
-    service,
-    position: joined.position,
-    estimatedWaitMinutes: status.estimatedWaitMinutes,
-    joinedAt: joined.entry.joinedAt,
   });
   return res.status(201).json({ ...status, notifications });
 });
@@ -155,7 +146,6 @@ router.post("/leave", (req, res) => {
   if (!entry) {
     return res.status(404).json({ message: "You are not in a queue." });
   }
-  closeEntry(req.user.id, OUTCOMES.LEFT);
   return res.json({ inQueue: false });
 });
 
@@ -167,9 +157,6 @@ router.post("/:serviceId/serve", requireRole("admin"), (req, res) => {
   const served = serveNext(service.id);
   if (!served) {
     return res.status(409).json({ message: "No one is waiting." });
-  }
-  if (served.userId !== null) {
-    closeEntry(served.userId, OUTCOMES.SERVED);
   }
   notifyAlmostServed(service);
   return res.json({ served });
@@ -183,9 +170,6 @@ router.delete("/:serviceId/entries/:entryId", requireRole("admin"), (req, res) =
     const removed = removeEntry(service.id, req.params.entryId);
     if (!removed) {
       return res.status(404).json({ message: "That person is not in this queue." });
-    }
-    if (removed.userId !== null) {
-      closeEntry(removed.userId, OUTCOMES.NO_SHOW);
     }
     notifyAlmostServed(service);
     return res.json(adminQueueView(service));

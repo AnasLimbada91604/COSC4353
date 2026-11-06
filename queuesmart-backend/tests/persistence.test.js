@@ -13,7 +13,6 @@ const { closeDb, getDb } = require("../src/db");
 const { resetUsers } = require("../src/store/users");
 const { resetServices, seedIfEmpty, findService } = require("../src/store/services");
 const { resetQueues } = require("../src/store/queues");
-const { resetHistory } = require("../src/store/history");
 const { withServer, send } = require("./http");
 
 after(() => {
@@ -25,7 +24,6 @@ beforeEach(() => {
   resetUsers();
   resetServices();
   resetQueues();
-  resetHistory();
 });
 
 async function signIn(base, email, role = "user") {
@@ -45,6 +43,11 @@ async function runServer(steps) {
   const result = await withServer(createApp(), steps);
   closeDb();
   return result;
+}
+
+async function adminLine(base, token) {
+  const response = await send(base, "/api/queue/1", { token });
+  return response.body.queue;
 }
 
 describe("data after a server restart", () => {
@@ -192,6 +195,71 @@ describe("data after a server restart", () => {
     seedIfEmpty();
     assert.equal(findService(1).name, "Academic Advising");
     assert.equal(findService(1).queueLength, 4);
+  });
+});
+
+describe("admin queue changes after a server restart", () => {
+  test("keeps the new order after moving someone up", async () => {
+    const { token, movedId } = await runServer(async (base) => {
+      const admin = await signIn(base, "admin@queuesmart.edu", "admin");
+      const line = await adminLine(base, admin);
+      const moved = await send(base, `/api/queue/1/entries/${line[1].id}/move`, {
+        method: "PATCH",
+        token: admin,
+        body: { direction: "up" },
+      });
+      assert.equal(moved.status, 200);
+      return { token: admin, movedId: line[1].id };
+    });
+
+    await runServer(async (base) => {
+      const line = await adminLine(base, token);
+      assert.equal(line[0].id, movedId);
+      assert.deepEqual(line.map((entry) => entry.position), [1, 2, 3, 4]);
+    });
+  });
+
+  test("keeps a raised priority and the place it moved to", async () => {
+    const { token, raisedId } = await runServer(async (base) => {
+      const admin = await signIn(base, "admin@queuesmart.edu", "admin");
+      const line = await adminLine(base, admin);
+      const raised = await send(base, `/api/queue/1/entries/${line[3].id}/priority`, {
+        method: "PATCH",
+        token: admin,
+        body: { priority: "High" },
+      });
+      assert.equal(raised.status, 200);
+      return { token: admin, raisedId: line[3].id };
+    });
+
+    await runServer(async (base) => {
+      const [first] = await adminLine(base, token);
+      assert.equal(first.id, raisedId);
+      assert.equal(first.priority, "High");
+    });
+  });
+
+  test("keeps a removed entry out of line, saved as canceled by an admin", async () => {
+    const { token, removedId } = await runServer(async (base) => {
+      const admin = await signIn(base, "admin@queuesmart.edu", "admin");
+      const line = await adminLine(base, admin);
+      const removed = await send(base, `/api/queue/1/entries/${line[0].id}`, { method: "DELETE", token: admin });
+      assert.equal(removed.status, 200);
+      return { token: admin, removedId: line[0].id };
+    });
+
+    await runServer(async (base) => {
+      const line = await adminLine(base, token);
+      assert.equal(line.length, 3);
+      assert.ok(line.every((entry) => entry.id !== removedId));
+      assert.deepEqual(line.map((entry) => entry.position), [1, 2, 3]);
+    });
+
+    // The row is still there, just ended: remove updates it instead of deleting it.
+    const row = getDb().prepare("SELECT status, end_reason FROM queue_entry WHERE id = ?").get(removedId);
+    assert.equal(row.status, "canceled");
+    assert.equal(row.end_reason, "removed");
+    closeDb();
   });
 });
 

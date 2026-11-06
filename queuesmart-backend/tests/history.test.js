@@ -1,92 +1,75 @@
 const assert = require("node:assert/strict");
+const { getDb } = require("../src/db");
 const { describe, test, beforeEach } = require("node:test");
-const {
-  OUTCOMES,
-  resetHistory,
-  recordJoin,
-  closeEntry,
-  listHistory,
-} = require("../src/store/history");
-
-const advising = { id: 1, name: "Academic Advising" };
-const financialAid = { id: 2, name: "Financial Aid" };
-
-function join(userId, service, joinedAt) {
-  return recordJoin({ userId, service, position: 5, estimatedWaitMinutes: 75, joinedAt });
-}
+const { resetUsers } = require("../src/store/users");
+const { resetServices, findService } = require("../src/store/services");
+const { resetQueues, joinQueue, leaveQueue, serveNext, removeEntry } = require("../src/store/queues");
+const { OUTCOMES, listHistory } = require("../src/store/history");
+const { addUser } = require("./dbHelpers");
 
 beforeEach(() => {
-  resetHistory();
+  resetUsers();
+  resetServices();
+  resetQueues();
+  addUser(7);
+  addUser(8);
 });
 
 describe("history store", () => {
-  test("records a join as an open entry", () => {
-    const entry = join(7, advising, "2026-10-20T15:00:00.000Z");
+  test("shows a visit still in progress", () => {
+    joinQueue(7, findService(1));
 
-    assert.deepEqual(entry, {
-      id: 1,
-      userId: 7,
-      serviceId: 1,
-      serviceName: "Academic Advising",
-      joinedAt: "2026-10-20T15:00:00.000Z",
-      endedAt: null,
-      positionAtJoin: 5,
-      estimatedWaitMinutes: 75,
-      actualWaitMinutes: null,
-      outcome: "In queue",
-    });
-  });
-
-  test("closes the open entry with the outcome and the minutes waited", () => {
-    join(7, advising, "2026-10-20T15:00:00.000Z");
-    const closed = closeEntry(7, OUTCOMES.SERVED, new Date("2026-10-20T16:10:00.000Z"));
-
-    assert.equal(closed.outcome, "Served");
-    assert.equal(closed.endedAt, "2026-10-20T16:10:00.000Z");
-    assert.equal(closed.actualWaitMinutes, 70);
+    const [visit] = listHistory(7);
+    assert.equal(visit.serviceName, "Academic Advising");
+    assert.equal(visit.outcome, OUTCOMES.IN_QUEUE);
+    assert.equal(visit.endedAt, null);
+    assert.equal(visit.actualWaitMinutes, null);
   });
 
   test("records leaving the queue", () => {
-    join(7, advising, "2026-10-20T15:00:00.000Z");
-    closeEntry(7, OUTCOMES.LEFT, new Date("2026-10-20T15:05:00.000Z"));
+    joinQueue(7, findService(1));
+    leaveQueue(7);
 
-    assert.equal(listHistory(7)[0].outcome, "Left queue");
+    const [visit] = listHistory(7);
+    assert.equal(visit.outcome, OUTCOMES.LEFT);
+    assert.notEqual(visit.endedAt, null);
   });
 
-  test("returns null when the user has no open entry", () => {
-    assert.equal(closeEntry(7, OUTCOMES.SERVED), null);
+  test("records being served", () => {
+    const joined = joinQueue(7, findService(1));
+    for (let i = 0; i < joined.position; i += 1) serveNext(1);
 
-    join(7, advising, "2026-10-20T15:00:00.000Z");
-    closeEntry(7, OUTCOMES.LEFT);
-    assert.equal(closeEntry(7, OUTCOMES.SERVED), null);
+    assert.equal(listHistory(7)[0].outcome, OUTCOMES.SERVED);
   });
 
-  test("rejects an unknown or non-closing outcome", () => {
-    join(7, advising, "2026-10-20T15:00:00.000Z");
+  test("records being removed by an admin as a no-show", () => {
+    const joined = joinQueue(7, findService(1));
+    removeEntry(1, joined.entry.id);
 
-    assert.throws(() => closeEntry(7, "Finished"), RangeError);
-    assert.throws(() => closeEntry(7, OUTCOMES.IN_QUEUE), RangeError);
+    assert.equal(listHistory(7)[0].outcome, OUTCOMES.NO_SHOW);
   });
 
-  test("lists only that user's entries, newest first", () => {
-    join(7, advising, "2026-10-01T15:00:00.000Z");
-    closeEntry(7, OUTCOMES.SERVED, new Date("2026-10-01T16:00:00.000Z"));
-    join(8, advising, "2026-10-05T15:00:00.000Z");
-    join(7, financialAid, "2026-10-10T15:00:00.000Z");
+  test("works out the minutes spent in line", () => {
+    const joined = joinQueue(7, findService(1));
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    getDb().prepare("UPDATE queue_entry SET join_time = ? WHERE id = ?").run(thirtyMinutesAgo, joined.entry.id);
+    leaveQueue(7);
 
-    const entries = listHistory(7);
-
-    assert.deepEqual(
-      entries.map((entry) => entry.serviceName),
-      ["Financial Aid", "Academic Advising"]
-    );
-    assert.equal(listHistory(99).length, 0);
+    assert.equal(listHistory(7)[0].actualWaitMinutes, 30);
   });
 
-  test("returns copies so callers cannot change stored history", () => {
-    join(7, advising, "2026-10-20T15:00:00.000Z");
-    listHistory(7)[0].outcome = "Served";
+  test("lists only that user's visits, newest first", () => {
+    joinQueue(7, findService(1));
+    leaveQueue(7);
+    joinQueue(8, findService(2));
+    joinQueue(7, findService(4));
 
-    assert.equal(listHistory(7)[0].outcome, "In queue");
+    const history = listHistory(7);
+    assert.deepEqual(history.map((visit) => visit.serviceName), ["Student Accounts", "Academic Advising"]);
+    assert.ok(history.every((visit) => visit.userId === 7));
+  });
+
+  test("is empty for a user with no visits, even with walk-ins in line", () => {
+    assert.deepEqual(listHistory(8), []);
   });
 });

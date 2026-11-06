@@ -3,6 +3,7 @@ const { seedWalkIns } = require("./services");
 
 const PRIORITY_RANK = { High: 3, Medium: 2, Low: 1 };
 const ENTRY_STATUS = { WAITING: "waiting", SERVED: "served", CANCELED: "canceled" };
+const END_REASON = { LEFT: "left", REMOVED: "removed" };
 
 const ENTRY_COLUMNS = `
   SELECT e.id, e.user_id, q.service_id, e.position, e.priority, e.join_time, e.ended_at, e.status
@@ -54,11 +55,11 @@ function savePositions(db, line) {
 }
 
 // Takes an entry out of the line for good, keeping its row as a record of the visit.
-function endEntry(db, entry, status) {
+function endEntry(db, entry, status, endReason = null) {
   const endedAt = new Date().toISOString();
-  db.prepare("UPDATE queue_entry SET status = ?, ended_at = ? WHERE id = ?").run(status, endedAt, entry.id);
+  db.prepare("UPDATE queue_entry SET status = ?, ended_at = ? , end_reason = ? WHERE id = ?").run(status, endedAt, endReason, entry.id);
   savePositions(db, lineFor(db, entry.serviceId));
-  return { ...entry, status, endedAt };
+  return { ...entry, status, endedAt, endReason };
 }
 
 function findActiveEntry(userId) {
@@ -100,7 +101,7 @@ function joinQueue(userId, service) {
 function leaveQueue(userId) {
   return withTransaction((db) => {
     const found = findActiveEntry(userId);
-    return found ? endEntry(db, found.entry, ENTRY_STATUS.CANCELED) : null;
+    return found ? endEntry(db, found.entry, ENTRY_STATUS.CANCELED, END_REASON.LEFT) : null;
   });
 }
 
@@ -137,7 +138,7 @@ function removeEntry(serviceId, entryId) {
   return withTransaction((db) => {
     const line = lineFor(db, Number(serviceId));
     const index = findEntryIndex(line, entryId);
-    return index === -1 ? null : endEntry(db, line[index], ENTRY_STATUS.CANCELED);
+    return index === -1 ? null : endEntry(db, line[index], ENTRY_STATUS.CANCELED, END_REASON.REMOVED);
   });
 }
 
@@ -182,6 +183,7 @@ function setEntryPriority(serviceId, entryId, priority) {
 
 module.exports = {
   ENTRY_STATUS,
+  END_REASON,
   resetQueues,
   findActiveEntry,
   findLatestEntry,

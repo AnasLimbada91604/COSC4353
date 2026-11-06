@@ -5,7 +5,6 @@ const createApp = require("../src/app");
 const { resetUsers } = require("../src/store/users");
 const { resetServices } = require("../src/store/services");
 const { resetQueues } = require("../src/store/queues");
-const { resetHistory } = require("../src/store/history");
 const { send } = require("./http");
 
 let server;
@@ -15,7 +14,6 @@ beforeEach(async () => {
   resetUsers();
   resetServices();
   resetQueues();
-  resetHistory();
   server = createApp().listen(0, "127.0.0.1");
   await once(server, "listening");
   base = `http://127.0.0.1:${server.address().port}`;
