@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const authRoutes = require("./routes/auth");
+const profileRoutes = require("./routes/profile");
 const serviceRoutes = require("./routes/services");
 const queueRoutes = require("./routes/queue");
 const historyRoutes = require("./routes/history");
@@ -17,6 +18,7 @@ function createApp() {
   });
 
   app.use("/api/auth", authRoutes);
+  app.use("/api/profile", profileRoutes);
   app.use("/api/services", serviceRoutes);
   app.use("/api/queue", queueRoutes);
   app.use("/api/history", historyRoutes);

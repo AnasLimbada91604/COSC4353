@@ -11,6 +11,7 @@ import UserDashboard from "./pages/UserDashboard";
 import JoinQueue from "./pages/JoinQueue";
 import History from "./pages/History";
 import Login from "./pages/Login";
+import Profile from "./pages/Profile";
 import QueueStatus from "./pages/QueueStatus";
 import Register from "./pages/Register";
 import QueueManagment from "./pages/QueueManagement";
@@ -27,6 +28,7 @@ function App() {
         <NavLink to="/join">Join Queue</NavLink>
         <NavLink to="/queue-status">Queue Status</NavLink>
         <NavLink to="/history">History</NavLink>
+        <NavLink to="/profile">Profile</NavLink>
         <NavLink to="/queue-management">Queue Management</NavLink>
         <NavLink to="/service-management">Service Management</NavLink>
       </nav>
@@ -39,6 +41,7 @@ function App() {
         <Route path="/join" element={<JoinQueue />} />
         <Route path="/queue-status" element={<QueueStatus />} />
         <Route path="/history" element={<History />} />
+        <Route path="/profile" element={<Profile />} />
         <Route path="/queue-management" element={<QueueManagment />} />
         <Route path="/service-management" element={<ServiceManagement />} />
       </Routes>
